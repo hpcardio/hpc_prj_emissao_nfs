@@ -104,6 +104,9 @@ class PendingIssuance:
     rua: str
     numero_casa: str
     bairro: str
+    cep: str
+    complemento: str
+    telefone: str
     cidade: str
     uf: str
     tipo_exame: str
@@ -127,6 +130,9 @@ class PendingIssuance:
             rua=_text(self.rua),
             numero_casa=_text(self.numero_casa),
             bairro=_text(self.bairro),
+            cep=_text(self.cep),
+            complemento=_text(self.complemento),
+            telefone=_text(self.telefone),
             cidade=_text(self.cidade) or default_city,
             uf=(_text(self.uf) or default_uf).upper(),
             tipo_exame=_multiline_text(self.tipo_exame),
@@ -378,6 +384,9 @@ class PostgresIssuanceRepository:
                 s.ds_endereco AS rua,
                 s.nr_endereco AS numero_casa,
                 s.nm_bairro AS bairro,
+                s.nr_cep AS cep,
+                s.ds_complemento AS complemento,
+                s.nr_fone AS telefone,
                 COALESCE(
                     to_jsonb(s) ->> 'cidade',
                     to_jsonb(s) ->> 'nm_cidade'
