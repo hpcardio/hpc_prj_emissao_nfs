@@ -13,6 +13,7 @@ from nfs_fortaleza.issuance import (
     _extract_invoice_number,
     _extract_pdf_url,
     _find_suggestion_selection_action,
+    _format_portal_phone,
     _merge_preserving_values,
     _script_action_ids,
     _select_option_value,
@@ -168,12 +169,47 @@ class JsfParserTests(unittest.TestCase):
         )
         self.assertEqual(
             values["emitirnfseForm:idTelefone"],
-            "(85) 99999-9999",
+            "(85)9999-99999",
         )
         self.assertEqual(
             values["emitirnfseForm:comboEscolherCidade"],
             "1389",
         )
+
+    def test_formats_phone_with_mask_required_by_portal(self) -> None:
+        cases = {
+            "85981386322": "(85)9813-86322",
+            "(85) 3333-3333": "(85)3333-3333",
+            "+55 (85) 9813-86322": "(85)9813-86322",
+            "981386322": "",
+            "123": "",
+            "": "",
+        }
+
+        for raw_phone, expected in cases.items():
+            with self.subTest(raw_phone=raw_phone):
+                self.assertEqual(
+                    _format_portal_phone(raw_phone),
+                    expected,
+                )
+
+    def test_omits_phone_when_source_cannot_be_normalized(self) -> None:
+        html = """
+        <select name="emitirnfseForm:comboEscolherPais">
+          <option value="1">BRASIL</option>
+        </select>
+        <select name="emitirnfseForm:comboEscolherEstado">
+          <option value="6">CE</option>
+        </select>
+        <select name="emitirnfseForm:comboEscolherCidade">
+          <option value="1389">FORTALEZA</option>
+        </select>
+        """
+        row = replace(example_row(), telefone="123")
+
+        values = _taker_form_values(html, row, "emitirnfseForm")
+
+        self.assertNotIn("emitirnfseForm:idTelefone", values)
 
     def test_preserves_existing_optional_taker_data_when_source_is_empty(
         self,
