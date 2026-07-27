@@ -42,6 +42,9 @@ def pending_item(
         rua="RUA TESTE",
         numero_casa="100",
         bairro="CENTRO",
+        cep="60000000",
+        complemento="APTO 101",
+        telefone="85999999999",
         cidade="",
         uf="",
         tipo_exame="ANALISE CLINICA",
@@ -88,6 +91,9 @@ class BatchPayloadTests(unittest.TestCase):
         self.assertEqual(row.valor, Decimal("60.75"))
         self.assertEqual(row.cidade, "FORTALEZA")
         self.assertEqual(row.uf, "CE")
+        self.assertEqual(row.cep, "60000000")
+        self.assertEqual(row.complemento, "APTO 101")
+        self.assertEqual(row.telefone, "85999999999")
 
         with self.assertRaisesRegex(ValueError, "valor do servico"):
             pending_item(valor=None).invoice_row()
@@ -263,6 +269,9 @@ class CapturingCursor:
         ("rua",),
         ("numero_casa",),
         ("bairro",),
+        ("cep",),
+        ("complemento",),
+        ("telefone",),
         ("cidade",),
         ("uf",),
         ("tipo_exame",),
@@ -334,6 +343,9 @@ class RepositoryQueryTests(unittest.TestCase):
         self.assertIn("w.validacao = 'VALIDADA'", compact_sql)
         self.assertIn("w.status = 'EMISSAO_SOLICITADA'", compact_sql)
         self.assertIn("s.valor_nota AS valor", compact_sql)
+        self.assertIn("s.nr_cep AS cep", compact_sql)
+        self.assertIn("s.ds_complemento AS complemento", compact_sql)
+        self.assertIn("s.nr_fone AS telefone", compact_sql)
         self.assertIn("e.cnpj_emissor", compact_sql)
         self.assertEqual(connection.parameters, (42, [101, 102]))
 

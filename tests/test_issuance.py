@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from nfs_fortaleza.issuance import (
     _script_action_ids,
     _select_option_value,
     _suggestion_selection_value,
+    _taker_form_values,
     filter_unissued_rows,
 )
 from nfs_fortaleza.spreadsheet import (
@@ -122,6 +124,81 @@ class JsfParserTests(unittest.TestCase):
             ),
             "476",
         )
+
+    def test_fills_all_available_taker_fields(self) -> None:
+        html = """
+        <select name="emitirnfseForm:comboEscolherPais">
+          <option value="1">BRASIL</option>
+        </select>
+        <select name="emitirnfseForm:comboEscolherEstado">
+          <option value="6">CE</option>
+        </select>
+        <select name="emitirnfseForm:comboEscolherCidade">
+          <option value="1389">FORTALEZA</option>
+        </select>
+        """
+
+        row = replace(
+            example_row(),
+            cep="60181110",
+            complemento="APTO 101",
+            telefone="(85) 99999-9999",
+        )
+        values = _taker_form_values(
+            html,
+            row,
+            "emitirnfseForm",
+        )
+
+        self.assertEqual(values["emitirnfseForm:idCEP"], "60181110")
+        self.assertEqual(
+            values["emitirnfseForm:idEndereco"],
+            "rua Alameda rosa Maria",
+        )
+        self.assertEqual(values["emitirnfseForm:idNumero"], "219")
+        self.assertEqual(
+            values["emitirnfseForm:idComplemento"],
+            "APTO 101",
+        )
+        self.assertEqual(
+            values["emitirnfseForm:idBairro"],
+            "cidade 2000",
+        )
+        self.assertEqual(
+            values["emitirnfseForm:idTelefone"],
+            "(85) 99999-9999",
+        )
+        self.assertEqual(
+            values["emitirnfseForm:comboEscolherCidade"],
+            "1389",
+        )
+
+    def test_preserves_existing_optional_taker_data_when_source_is_empty(
+        self,
+    ) -> None:
+        html = """
+        <select name="emitirnfseForm:comboEscolherPais">
+          <option value="1">BRASIL</option>
+        </select>
+        <select name="emitirnfseForm:comboEscolherEstado">
+          <option value="6">CE</option>
+        </select>
+        <select name="emitirnfseForm:comboEscolherCidade">
+          <option value="1389">FORTALEZA</option>
+        </select>
+        """
+        row = replace(
+            example_row(),
+            cep="",
+            complemento="",
+            telefone="",
+        )
+
+        values = _taker_form_values(html, row, "emitirnfseForm")
+
+        self.assertNotIn("emitirnfseForm:idCEP", values)
+        self.assertNotIn("emitirnfseForm:idComplemento", values)
+        self.assertNotIn("emitirnfseForm:idTelefone", values)
 
     def test_extracts_jsf_actions_in_execution_order(self) -> None:
         script = """

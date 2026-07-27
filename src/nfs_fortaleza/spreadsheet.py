@@ -45,6 +45,9 @@ class InvoiceSpreadsheetRow:
     tipo_exame: str
     data: str
     email: str
+    cep: str = ""
+    complemento: str = ""
+    telefone: str = ""
 
     @property
     def cpf_digits(self) -> str:
@@ -54,6 +57,10 @@ class InvoiceSpreadsheetRow:
     def cpf_formatted(self) -> str:
         digits = self.cpf_digits
         return f"{digits[:3]}.{digits[3:6]}.{digits[6:9]}-{digits[9:]}"
+
+    @property
+    def cep_digits(self) -> str:
+        return re.sub(r"\D", "", self.cep)
 
     @property
     def valor_br(self) -> str:
@@ -168,6 +175,9 @@ def _build_row(
         tipo_exame=_cell_multiline_text(cell("TIPO DE EXAME")),
         data=_cell_text(cell("DATA")),
         email=_cell_text(cell("EMAIL")),
+        cep=_cell_text(cell("CEP")),
+        complemento=_cell_text(cell("COMPLEMENTO")),
+        telefone=_cell_text(cell("TELEFONE")),
     )
 
 
@@ -190,6 +200,8 @@ def _validate_row(row: InvoiceSpreadsheetRow) -> None:
         raise ValueError(f"Linha {row.row_number}: VALOR deve ser maior que zero.")
     if len(row.uf) != 2:
         raise ValueError(f"Linha {row.row_number}: UF invalida: {row.uf!r}")
+    if row.cep and len(row.cep_digits) != 8:
+        raise ValueError(f"Linha {row.row_number}: CEP invalido: {row.cep!r}")
 
 
 def _normalize_header(value: Any) -> str:

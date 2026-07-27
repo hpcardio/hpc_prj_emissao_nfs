@@ -326,34 +326,19 @@ class NfseIssuanceClient(PortalClient):
         )
         state = _merge_direct_form_state(state, selected_type.text, REGISTRATION_FORM)
 
+        registration_markup = registration.text + selected_type.text
         field_values = {
-            f"{REGISTRATION_FORM}:idCPFCNPJ": row.cpf_formatted,
-            f"{REGISTRATION_FORM}:idNome": row.paciente,
             f"{REGISTRATION_FORM}:idInscricaoMunicipalFortaleza": "",
-            f"{REGISTRATION_FORM}:comboEscolherPais": _select_option_value(
-                registration.text + selected_type.text,
-                f"{REGISTRATION_FORM}:comboEscolherPais",
-                "BRASIL",
-            ),
-            f"{REGISTRATION_FORM}:comboEscolherEstado": _select_option_value(
-                registration.text + selected_type.text,
-                f"{REGISTRATION_FORM}:comboEscolherEstado",
-                row.uf,
-            ),
-            f"{REGISTRATION_FORM}:comboEscolherCidade": _select_option_value(
-                registration.text + selected_type.text,
-                f"{REGISTRATION_FORM}:comboEscolherCidade",
-                row.cidade,
-            ),
-            f"{REGISTRATION_FORM}:idEndereco": row.rua,
-            f"{REGISTRATION_FORM}:idNumero": row.numero_casa,
-            f"{REGISTRATION_FORM}:idComplemento": "",
-            f"{REGISTRATION_FORM}:idBairro": row.bairro,
-            f"{REGISTRATION_FORM}:idTelefone": "",
-            f"{REGISTRATION_FORM}:inputEmail3": row.email,
         }
+        field_values.update(
+            _taker_form_values(
+                registration_markup,
+                row,
+                REGISTRATION_FORM,
+            )
+        )
         state.update(field_values)
-        save_element = _find_action_element(registration.text + selected_type.text, "Salvar")
+        save_element = _find_action_element(registration_markup, "Salvar")
         save_action = _primary_action_id(save_element)
         payload = dict(state)
         payload[save_action] = save_element.attrs.get("value", "Salvar") or "Salvar"
@@ -371,6 +356,7 @@ class NfseIssuanceClient(PortalClient):
         row: InvoiceSpreadsheetRow,
     ) -> tuple[Response, dict[str, str]]:
         state = _extract_direct_form_state(emit_page.text, EMISSION_FORM)
+        state.update(_taker_form_values(emit_page.text, row, EMISSION_FORM))
         nested_form = f"{EMISSION_FORM}:idFormularioPesquisaCnae"
         nested_state = _extract_direct_form_state(emit_page.text, nested_form)
         nested_state[f"{nested_form}:idCnaePesquisa"] = HOSPITAL_CNAE_SEARCH
@@ -906,6 +892,49 @@ def _selected_option_value(text: str, field_name: str) -> str:
         if selected is not None:
             return selected
     raise IssuancePortalError(f"Nenhuma opcao selecionada no campo {field_name!r}.")
+
+
+def _taker_form_values(
+    text: str,
+    row: InvoiceSpreadsheetRow,
+    form_id: str,
+) -> dict[str, str]:
+    values = {
+        f"{form_id}:idCPFCNPJ": row.cpf_formatted,
+        f"{form_id}:idNome": row.paciente,
+        f"{form_id}:comboEscolherPais": _select_option_value(
+            text,
+            f"{form_id}:comboEscolherPais",
+            "BRASIL",
+        ),
+        f"{form_id}:comboEscolherEstado": _select_option_value(
+            text,
+            f"{form_id}:comboEscolherEstado",
+            row.uf,
+        ),
+        f"{form_id}:comboEscolherCidade": _select_option_value(
+            text,
+            f"{form_id}:comboEscolherCidade",
+            row.cidade,
+        ),
+    }
+    optional_values = {
+        f"{form_id}:idCEP": row.cep_digits,
+        f"{form_id}:idEndereco": row.rua,
+        f"{form_id}:idNumero": row.numero_casa,
+        f"{form_id}:idComplemento": row.complemento,
+        f"{form_id}:idBairro": row.bairro,
+        f"{form_id}:idTelefone": row.telefone[:20],
+        f"{form_id}:inputEmail3": row.email,
+    }
+    values.update(
+        {
+            field: value
+            for field, value in optional_values.items()
+            if value
+        }
+    )
+    return values
 
 
 def _find_cnae_row_index(text: str, description: str) -> str:
