@@ -32,6 +32,20 @@ HOSPITAL_CNAE_DESCRIPTION = (
     "ATIVIDADES DE ATENDIMENTO HOSPITALAR, EXCETO PRONTO-SOCORRO "
     "E UNIDADES PARA ATENDIMENTO A URGENCIAS"
 )
+TAKER_FIELD_SUFFIXES = (
+    "idCPFCNPJ",
+    "idNome",
+    "comboEscolherPais",
+    "comboEscolherEstado",
+    "comboEscolherCidade",
+    "idCEP",
+    "idEndereco",
+    "idNumero",
+    "idComplemento",
+    "idBairro",
+    "idTelefone",
+    "inputEmail3",
+)
 
 
 class IssuancePortalError(RuntimeError):
@@ -356,7 +370,12 @@ class NfseIssuanceClient(PortalClient):
         row: InvoiceSpreadsheetRow,
     ) -> tuple[Response, dict[str, str]]:
         state = _extract_direct_form_state(emit_page.text, EMISSION_FORM)
-        state.update(_taker_form_values(emit_page.text, row, EMISSION_FORM))
+        taker_values = _taker_form_values(
+            emit_page.text,
+            row,
+            EMISSION_FORM,
+        )
+        state.update(taker_values)
         nested_form = f"{EMISSION_FORM}:idFormularioPesquisaCnae"
         nested_state = _extract_direct_form_state(emit_page.text, nested_form)
         nested_state[f"{nested_form}:idCnaePesquisa"] = HOSPITAL_CNAE_SEARCH
@@ -380,7 +399,12 @@ class NfseIssuanceClient(PortalClient):
             _ajax_payload(nested_state, select_action, container=container),
             ajax=True,
         )
-        state = _merge_direct_form_state(state, selected.text, EMISSION_FORM)
+        state = _merge_preserving_values(
+            state,
+            selected.text,
+            EMISSION_FORM,
+            taker_values,
+        )
         current_markup = emit_page.text + selected.text
 
         activity_field = f"{EMISSION_FORM}:comboEscolherAtividadeCpbs"
@@ -400,7 +424,12 @@ class NfseIssuanceClient(PortalClient):
             _ajax_payload(state, _select_event_action(current_markup, nbs_field)),
             ajax=True,
         )
-        state = _merge_direct_form_state(state, nbs_response.text, EMISSION_FORM)
+        state = _merge_preserving_values(
+            state,
+            nbs_response.text,
+            EMISSION_FORM,
+            taker_values,
+        )
         current_markup += nbs_response.text
 
         indicator_field = f"{EMISSION_FORM}:comboEscolherIndOperacao"
@@ -411,7 +440,12 @@ class NfseIssuanceClient(PortalClient):
             _ajax_payload(state, _select_event_action(current_markup, indicator_field)),
             ajax=True,
         )
-        state = _merge_direct_form_state(state, indicator_response.text, EMISSION_FORM)
+        state = _merge_preserving_values(
+            state,
+            indicator_response.text,
+            EMISSION_FORM,
+            taker_values,
+        )
         current_markup += indicator_response.text
 
         cst_field = f"{EMISSION_FORM}:comboEscolherCst"
@@ -422,7 +456,12 @@ class NfseIssuanceClient(PortalClient):
             _ajax_payload(state, _select_event_action(current_markup, cst_field)),
             ajax=True,
         )
-        state = _merge_direct_form_state(state, cst_response.text, EMISSION_FORM)
+        state = _merge_preserving_values(
+            state,
+            cst_response.text,
+            EMISSION_FORM,
+            taker_values,
+        )
         current_markup += cst_response.text
 
         classification_field = f"{EMISSION_FORM}:comboEscolherClassTrib"
@@ -457,6 +496,7 @@ class NfseIssuanceClient(PortalClient):
         configured_page: Response,
         state: dict[str, str],
     ) -> tuple[Response, dict[str, str]]:
+        taker_values = _taker_values_from_state(state, EMISSION_FORM)
         validation_element = _find_action_element(
             configured_page.text,
             "Validar Campos",
@@ -476,7 +516,12 @@ class NfseIssuanceClient(PortalClient):
                 _ajax_payload(state, action),
                 ajax=True,
             )
-            state = _merge_direct_form_state(state, response.text, EMISSION_FORM)
+            state = _merge_preserving_values(
+                state,
+                response.text,
+                EMISSION_FORM,
+                taker_values,
+            )
             latest = _materialize_ajax_response(configured_page, response)
 
         messages = _extract_error_messages(latest.text)
@@ -690,6 +735,17 @@ def _merge_direct_form_state(state: dict[str, str], text: str, form_id: str) -> 
         text,
         default=merged.get("javax.faces.ViewState", ""),
     )
+    return merged
+
+
+def _merge_preserving_values(
+    state: dict[str, str],
+    text: str,
+    form_id: str,
+    preserved_values: dict[str, str],
+) -> dict[str, str]:
+    merged = _merge_direct_form_state(state, text, form_id)
+    merged.update(preserved_values)
     return merged
 
 
@@ -935,6 +991,21 @@ def _taker_form_values(
         }
     )
     return values
+
+
+def _taker_values_from_state(
+    state: dict[str, str],
+    form_id: str,
+) -> dict[str, str]:
+    fields = {
+        f"{form_id}:{suffix}"
+        for suffix in TAKER_FIELD_SUFFIXES
+    }
+    return {
+        field: value
+        for field, value in state.items()
+        if field in fields
+    }
 
 
 def _find_cnae_row_index(text: str, description: str) -> str:

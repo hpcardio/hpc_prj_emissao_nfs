@@ -13,10 +13,12 @@ from nfs_fortaleza.issuance import (
     _extract_invoice_number,
     _extract_pdf_url,
     _find_suggestion_selection_action,
+    _merge_preserving_values,
     _script_action_ids,
     _select_option_value,
     _suggestion_selection_value,
     _taker_form_values,
+    _taker_values_from_state,
     filter_unissued_rows,
 )
 from nfs_fortaleza.spreadsheet import (
@@ -199,6 +201,53 @@ class JsfParserTests(unittest.TestCase):
         self.assertNotIn("emitirnfseForm:idCEP", values)
         self.assertNotIn("emitirnfseForm:idComplemento", values)
         self.assertNotIn("emitirnfseForm:idTelefone", values)
+
+    def test_preserves_taker_data_when_ajax_returns_stale_registration(
+        self,
+    ) -> None:
+        state = {
+            "emitirnfseForm": "emitirnfseForm",
+            "emitirnfseForm:idCEP": "60181110",
+            "emitirnfseForm:idComplemento": "APTO 101",
+            "emitirnfseForm:idTelefone": "(85) 99999-9999",
+            "emitirnfseForm:idValorServicoPrestado": "60,75",
+            "javax.faces.ViewState": "state-1",
+        }
+        stale_ajax = """
+        <form id="emitirnfseForm">
+          <input name="emitirnfseForm:idCEP" value="" />
+          <input name="emitirnfseForm:idComplemento" value="" />
+          <input name="emitirnfseForm:idTelefone" value="" />
+          <input name="emitirnfseForm:idValorServicoPrestado" value="60,75" />
+          <input
+            type="hidden"
+            name="javax.faces.ViewState"
+            value="state-2"
+          />
+        </form>
+        """
+        taker_values = _taker_values_from_state(
+            state,
+            "emitirnfseForm",
+        )
+
+        merged = _merge_preserving_values(
+            state,
+            stale_ajax,
+            "emitirnfseForm",
+            taker_values,
+        )
+
+        self.assertEqual(merged["emitirnfseForm:idCEP"], "60181110")
+        self.assertEqual(
+            merged["emitirnfseForm:idComplemento"],
+            "APTO 101",
+        )
+        self.assertEqual(
+            merged["emitirnfseForm:idTelefone"],
+            "(85) 99999-9999",
+        )
+        self.assertEqual(merged["javax.faces.ViewState"], "state-2")
 
     def test_extracts_jsf_actions_in_execution_order(self) -> None:
         script = """
