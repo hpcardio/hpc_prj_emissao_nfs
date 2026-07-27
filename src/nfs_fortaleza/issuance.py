@@ -980,7 +980,7 @@ def _taker_form_values(
         f"{form_id}:idNumero": row.numero_casa,
         f"{form_id}:idComplemento": row.complemento,
         f"{form_id}:idBairro": row.bairro,
-        f"{form_id}:idTelefone": row.telefone[:20],
+        f"{form_id}:idTelefone": _format_portal_phone(row.telefone),
         f"{form_id}:inputEmail3": row.email,
     }
     values.update(
@@ -991,6 +991,15 @@ def _taker_form_values(
         }
     )
     return values
+
+
+def _format_portal_phone(value: str) -> str:
+    digits = re.sub(r"\D", "", value or "")
+    if digits.startswith("55") and len(digits) in {12, 13}:
+        digits = digits[2:]
+    if len(digits) not in {10, 11}:
+        return ""
+    return f"({digits[:2]}){digits[2:6]}-{digits[6:]}"
 
 
 def _taker_values_from_state(
