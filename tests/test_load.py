@@ -44,20 +44,27 @@ class DestinationTableTests(unittest.TestCase):
         connection = connect.return_value.__enter__.return_value
         cursor = connection.cursor.return_value.__enter__.return_value
         cursor.fetchall.return_value = [
-            ("11.111.111/0001-11", "000123"),
-            (None, "456"),
+            (" chave-abc ", "11.111.111/0001-11", "000123"),
+            (None, "22.222.222/0001-22", "000456"),
+            (None, None, "789"),
         ]
 
         identities = _existing_nfse_keys(_settings(), "nfse_xml")
 
-        self.assertEqual(identities, {("11111111000111", "123")})
+        self.assertEqual(
+            identities,
+            {
+                ("codigo_verificacao_nfse", "CHAVE-ABC"),
+                ("prestador_numero_nfse", "22222222000122", "456"),
+            },
+        )
         connect.assert_called_once_with("postgresql://database.test/nfse")
 
     @patch("nfs_fortaleza.load.nfse_xml_resource")
     @patch("nfs_fortaleza.load.dlt.pipeline")
     @patch(
         "nfs_fortaleza.load._existing_nfse_keys",
-        return_value={("11111111000111", "123")},
+        return_value={("codigo_verificacao_nfse", "CHAVE-ABC")},
     )
     @patch("nfs_fortaleza.load._destination_table_exists", return_value=True)
     def test_uses_regular_merge_when_table_exists(
@@ -83,7 +90,7 @@ class DestinationTableTests(unittest.TestCase):
             Path("nota.xml"),
             MonthPeriod(2026, 7),
             table_name="nfse_xml",
-            existing_nfse_keys=(("11111111000111", "123"),),
+            existing_nfse_keys=(("codigo_verificacao_nfse", "CHAVE-ABC"),),
         )
         pipeline.run.assert_called_once_with(resource)
 

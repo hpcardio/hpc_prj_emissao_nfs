@@ -47,10 +47,13 @@ def _existing_nfse_keys(
         with connection.cursor() as cursor:
             cursor.execute(
                 sql.SQL(
-                    "SELECT prestador_cnpj, numero_nfse "
+                    "SELECT codigo_verificacao_nfse, "
+                    "prestador_cnpj, numero_nfse "
                     "FROM {}.{} "
-                    "WHERE prestador_cnpj IS NOT NULL "
-                    "AND numero_nfse IS NOT NULL"
+                    "WHERE NULLIF(BTRIM(codigo_verificacao_nfse), '') "
+                    "IS NOT NULL "
+                    "OR (prestador_cnpj IS NOT NULL "
+                    "AND numero_nfse IS NOT NULL)"
                 ).format(
                     sql.Identifier(settings.postgres_schema),
                     sql.Identifier(table_name),
@@ -58,11 +61,16 @@ def _existing_nfse_keys(
             )
             identities = {
                 identity
-                for prestador_cnpj, numero_nfse in cursor.fetchall()
+                for (
+                    codigo_verificacao_nfse,
+                    prestador_cnpj,
+                    numero_nfse,
+                ) in cursor.fetchall()
                 if (
                     identity := nfse_identity(
-                        prestador_cnpj,
-                        numero_nfse,
+                        codigo_verificacao_nfse,
+                        prestador_cnpj=prestador_cnpj,
+                        numero_nfse=numero_nfse,
                     )
                 )
                 is not None

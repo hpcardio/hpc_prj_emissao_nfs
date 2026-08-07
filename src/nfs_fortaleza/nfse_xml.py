@@ -18,7 +18,7 @@ from nfs_fortaleza.periods import DateRangePeriod, MonthPeriod
 
 
 QueryPeriod = MonthPeriod | DateRangePeriod
-NfseIdentity = tuple[str, str]
+NfseIdentity = tuple[str, ...]
 
 
 def infer_nfse_period(path: Path) -> MonthPeriod:
@@ -91,8 +91,9 @@ def _filter_new_nfse_records(
 ) -> Iterator[dict[str, Any]]:
     for record in records:
         identity = nfse_identity(
-            record.get("prestador_cnpj"),
-            record.get("numero_nfse"),
+            record.get("codigo_verificacao_nfse"),
+            prestador_cnpj=record.get("prestador_cnpj"),
+            numero_nfse=record.get("numero_nfse"),
         )
         if identity is not None:
             if identity in known_nfse_keys:
@@ -102,16 +103,22 @@ def _filter_new_nfse_records(
 
 
 def nfse_identity(
-    prestador_cnpj: Any,
-    numero_nfse: Any,
+    codigo_verificacao_nfse: Any,
+    *,
+    prestador_cnpj: Any = None,
+    numero_nfse: Any = None,
 ) -> NfseIdentity | None:
+    verification_code = str(codigo_verificacao_nfse or "").strip().upper()
+    if verification_code:
+        return "codigo_verificacao_nfse", verification_code
+
     cnpj = re.sub(r"\D", "", str(prestador_cnpj or ""))
     number = str(numero_nfse or "").strip()
     if not cnpj or not number:
         return None
     if number.isdigit():
         number = number.lstrip("0") or "0"
-    return cnpj, number
+    return "prestador_numero_nfse", cnpj, number
 
 
 def parse_nfse_xml(xml_content: bytes, competencia: str, arquivo_origem: str) -> Iterator[dict[str, Any]]:

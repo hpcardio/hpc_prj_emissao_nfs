@@ -685,8 +685,10 @@ flowchart TD
 
 Cada execução precisa de um `run-id` exclusivo. O padrão abaixo inclui a
 competência e um timestamp para evitar `DagRunAlreadyExists`. Ao repetir uma
-competência, o pipeline consulta `nfse_xml` e envia ao `dlt` somente notas cuja
-combinação de CNPJ do prestador e número da NFS-e ainda não exista na tabela.
+competência, o pipeline consulta `nfse_xml` e envia ao `dlt` somente notas cujo
+`codigo_verificacao_nfse`, a chave fiscal da nota, ainda não exista na tabela.
+Quando um XML excepcional não traz essa chave, a combinação de CNPJ do
+prestador e número da NFS-e é usada como fallback.
 
 No desenvolvimento local, com o projeto iniciado por `astro dev start`, use o
 comando nativo do Astro:
