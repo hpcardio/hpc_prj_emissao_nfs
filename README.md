@@ -681,6 +681,41 @@ flowchart TD
     M --> N[Carregar nfse_xml]
 ```
 
+### Execução manual em desenvolvimento e produção
+
+Cada execução precisa de um `run-id` exclusivo. O padrão abaixo inclui a
+competência e um timestamp para evitar `DagRunAlreadyExists`. Ao repetir uma
+competência, o pipeline consulta `nfse_xml` e envia ao `dlt` somente notas cuja
+combinação de CNPJ do prestador e número da NFS-e ainda não exista na tabela.
+
+No desenvolvimento local, com o projeto iniciado por `astro dev start`, use o
+comando nativo do Astro:
+
+```bash
+astro dev run dags trigger extracao_nfse \
+  --run-id "extracao_manual_202608_$(date +%Y%m%d_%H%M%S)" \
+  --conf '{"competencia":"08/2026"}'
+```
+
+Em produção, execute o Airflow dentro do container do scheduler:
+
+```bash
+docker exec -it prj-web-nfs_1f87bb-scheduler-1 \
+  airflow dags trigger extracao_nfse \
+  --run-id "extracao_manual_202608_$(date +%Y%m%d_%H%M%S)" \
+  --conf '{"competencia":"08/2026"}'
+```
+
+Se o nome do container mudar após um novo deployment, localize-o antes com:
+
+```bash
+docker ps --filter name=prj-web-nfs --filter name=scheduler \
+  --format '{{.Names}}'
+```
+
+Para outra competência, altere tanto `202608` no `run-id` quanto `08/2026` no
+`--conf`.
+
 ### Uso pela linha de comando
 
 Consultar e carregar uma nota específica:
