@@ -32,26 +32,43 @@ class ParseNfseXmlTests(unittest.TestCase):
 
 
 class NfseIdentityTests(unittest.TestCase):
-    def test_normalizes_cnpj_and_invoice_number(self) -> None:
+    def test_uses_normalized_verification_code_as_invoice_key(self) -> None:
         self.assertEqual(
-            nfse_identity("11.111.111/0001-11", "000123"),
-            ("11111111000111", "123"),
+            nfse_identity(
+                " chave-abc ",
+                prestador_cnpj="11.111.111/0001-11",
+                numero_nfse="000123",
+            ),
+            ("codigo_verificacao_nfse", "CHAVE-ABC"),
         )
 
-    def test_filters_database_records_and_duplicates_from_same_file(self) -> None:
-        existing = {("11111111000111", "1")}
+    def test_falls_back_to_normalized_provider_and_number_without_key(self) -> None:
+        self.assertEqual(
+            nfse_identity(
+                None,
+                prestador_cnpj="11.111.111/0001-11",
+                numero_nfse="000123",
+            ),
+            ("prestador_numero_nfse", "11111111000111", "123"),
+        )
+
+    def test_filters_existing_key_and_keeps_same_number_with_new_key(self) -> None:
+        existing = {("codigo_verificacao_nfse", "CHAVE-1")}
         records = [
             {
+                "codigo_verificacao_nfse": " chave-1 ",
                 "prestador_cnpj": "11.111.111/0001-11",
                 "numero_nfse": "0001",
             },
             {
-                "prestador_cnpj": "22.222.222/0001-22",
-                "numero_nfse": "2",
+                "codigo_verificacao_nfse": "CHAVE-2",
+                "prestador_cnpj": "11.111.111/0001-11",
+                "numero_nfse": "0001",
             },
             {
-                "prestador_cnpj": "22.222.222/0001-22",
-                "numero_nfse": "0002",
+                "codigo_verificacao_nfse": "chave-2",
+                "prestador_cnpj": "33.333.333/0001-33",
+                "numero_nfse": "9999",
             },
         ]
 
@@ -60,7 +77,10 @@ class NfseIdentityTests(unittest.TestCase):
         self.assertEqual(result, [records[1]])
         self.assertEqual(
             existing,
-            {("11111111000111", "1"), ("22222222000122", "2")},
+            {
+                ("codigo_verificacao_nfse", "CHAVE-1"),
+                ("codigo_verificacao_nfse", "CHAVE-2"),
+            },
         )
 
     def test_dlt_resource_does_not_yield_an_existing_invoice(self) -> None:
@@ -69,6 +89,7 @@ class NfseIdentityTests(unittest.TestCase):
           <Nfse>
             <InfNfse>
               <Numero>000123</Numero>
+              <CodigoVerificacao>Chave-ABC</CodigoVerificacao>
               <PrestadorServico>
                 <IdentificacaoPrestador>
                   <Cnpj>11111111000111</Cnpj>
@@ -84,7 +105,9 @@ class NfseIdentityTests(unittest.TestCase):
             resource = nfse_xml_resource(
                 path,
                 MonthPeriod(2026, 1),
-                existing_nfse_keys={("11111111000111", "123")},
+                existing_nfse_keys={
+                    ("codigo_verificacao_nfse", "CHAVE-ABC")
+                },
             )
 
             records = list(resource)
