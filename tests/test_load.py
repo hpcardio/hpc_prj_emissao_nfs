@@ -5,7 +5,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from nfs_fortaleza.config import Settings
-from nfs_fortaleza.load import _destination_table_exists, load_nfse_xml
+from nfs_fortaleza.load import (
+    _destination_table_exists,
+    _existing_nfse_keys,
+    load_nfse_xml,
+)
 from nfs_fortaleza.periods import MonthPeriod
 
 
@@ -35,12 +39,31 @@ class DestinationTableTests(unittest.TestCase):
             ("api_prontocardio", "nfse_xml"),
         )
 
+    @patch("nfs_fortaleza.load.psycopg2.connect")
+    def test_reads_existing_nfse_identities(self, connect) -> None:
+        connection = connect.return_value.__enter__.return_value
+        cursor = connection.cursor.return_value.__enter__.return_value
+        cursor.fetchall.return_value = [
+            ("11.111.111/0001-11", "000123"),
+            (None, "456"),
+        ]
+
+        identities = _existing_nfse_keys(_settings(), "nfse_xml")
+
+        self.assertEqual(identities, {("11111111000111", "123")})
+        connect.assert_called_once_with("postgresql://database.test/nfse")
+
     @patch("nfs_fortaleza.load.nfse_xml_resource")
     @patch("nfs_fortaleza.load.dlt.pipeline")
+    @patch(
+        "nfs_fortaleza.load._existing_nfse_keys",
+        return_value={("11111111000111", "123")},
+    )
     @patch("nfs_fortaleza.load._destination_table_exists", return_value=True)
     def test_uses_regular_merge_when_table_exists(
         self,
         table_exists,
+        existing_keys,
         pipeline_factory,
         resource_factory,
     ) -> None:
@@ -55,14 +78,23 @@ class DestinationTableTests(unittest.TestCase):
         )
 
         table_exists.assert_called_once_with(_settings(), "nfse_xml")
+        existing_keys.assert_called_once_with(_settings(), "nfse_xml")
+        resource_factory.assert_called_once_with(
+            Path("nota.xml"),
+            MonthPeriod(2026, 7),
+            table_name="nfse_xml",
+            existing_nfse_keys=(("11111111000111", "123"),),
+        )
         pipeline.run.assert_called_once_with(resource)
 
     @patch("nfs_fortaleza.load.nfse_xml_resource")
     @patch("nfs_fortaleza.load.dlt.pipeline")
+    @patch("nfs_fortaleza.load._existing_nfse_keys")
     @patch("nfs_fortaleza.load._destination_table_exists", return_value=False)
     def test_recreates_resource_when_table_was_removed_outside_dlt(
         self,
         table_exists,
+        existing_keys,
         pipeline_factory,
         resource_factory,
     ) -> None:
@@ -77,6 +109,13 @@ class DestinationTableTests(unittest.TestCase):
         )
 
         table_exists.assert_called_once_with(_settings(), "nfse_xml")
+        existing_keys.assert_not_called()
+        resource_factory.assert_called_once_with(
+            Path("nota.xml"),
+            MonthPeriod(2026, 7),
+            table_name="nfse_xml",
+            existing_nfse_keys=(),
+        )
         pipeline.run.assert_called_once_with(
             resource,
             refresh="drop_resources",

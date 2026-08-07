@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Collection, Iterable, Iterator
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -18,6 +18,7 @@ from nfs_fortaleza.periods import DateRangePeriod, MonthPeriod
 
 
 QueryPeriod = MonthPeriod | DateRangePeriod
+NfseIdentity = tuple[str, str]
 
 
 def infer_nfse_period(path: Path) -> MonthPeriod:
@@ -48,10 +49,14 @@ def nfse_xml_resource(
     competencia: QueryPeriod,
     *,
     table_name: str = "nfse_xml",
+    existing_nfse_keys: Collection[NfseIdentity] = (),
 ):
     """Build a dlt filesystem resource that reads exported NFS-e XML files."""
     source = filesystem(bucket_url=str(path.resolve().parent), file_glob=path.name)
-    resource = source | read_nfse_xml(competencia.yyyymm)
+    resource = source | read_nfse_xml(
+        competencia.yyyymm,
+        tuple(existing_nfse_keys),
+    )
     resource = resource.with_name(table_name)
     resource.apply_hints(
         primary_key="row_hash",
@@ -65,14 +70,48 @@ def nfse_xml_resource(
 def read_nfse_xml(
     items: Iterator[FileItemDict],
     competencia: str,
+    existing_nfse_keys: tuple[NfseIdentity, ...] = (),
 ) -> Iterator[dict[str, Any]]:
     """Read XML/ZIP files from dlt filesystem FileItemDict objects."""
+    known_nfse_keys = set(existing_nfse_keys)
     for item in items:
         with item.open() as file:
             content = file.read()
         file_name = Path(item["file_name"]).name
         for xml_name, xml_content in _iter_xml_documents(file_name, content):
-            yield from parse_nfse_xml(xml_content, competencia, xml_name)
+            yield from _filter_new_nfse_records(
+                parse_nfse_xml(xml_content, competencia, xml_name),
+                known_nfse_keys,
+            )
+
+
+def _filter_new_nfse_records(
+    records: Iterable[dict[str, Any]],
+    known_nfse_keys: set[NfseIdentity],
+) -> Iterator[dict[str, Any]]:
+    for record in records:
+        identity = nfse_identity(
+            record.get("prestador_cnpj"),
+            record.get("numero_nfse"),
+        )
+        if identity is not None:
+            if identity in known_nfse_keys:
+                continue
+            known_nfse_keys.add(identity)
+        yield record
+
+
+def nfse_identity(
+    prestador_cnpj: Any,
+    numero_nfse: Any,
+) -> NfseIdentity | None:
+    cnpj = re.sub(r"\D", "", str(prestador_cnpj or ""))
+    number = str(numero_nfse or "").strip()
+    if not cnpj or not number:
+        return None
+    if number.isdigit():
+        number = number.lstrip("0") or "0"
+    return cnpj, number
 
 
 def parse_nfse_xml(xml_content: bytes, competencia: str, arquivo_origem: str) -> Iterator[dict[str, Any]]:
