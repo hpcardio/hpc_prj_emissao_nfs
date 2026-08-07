@@ -11,6 +11,7 @@ from nfs_fortaleza.portal import (
     InscricaoRow,
     PortalClient,
     PortalOptions,
+    _result_page_fingerprint,
     _validate_exported_inscricao,
 )
 
@@ -85,6 +86,67 @@ class ExportCompetenciaInscricoesTests(unittest.TestCase):
             [call(first_export, first), call(second_export, second)]
         )
 
+    def test_processes_next_page_when_html_row_indexes_repeat(self) -> None:
+        row = InscricaoRow("0", "11.111.111/0001-11", "100", "Empresa A")
+        client = PortalClient(self.settings)
+        session = Mock(name="session")
+        query = Mock(
+            url="https://example.test/grpfor/pages/nfse/consulta.seam",
+            text="Consultar NFS-e",
+        )
+        first_page = (
+            '<a id="consultarnfseForm:dataTable:0:j_id374">Nota A</a>'
+        )
+        second_page = (
+            '<a id="consultarnfseForm:dataTable:0:j_id374">Nota B</a>'
+        )
+        query_result = Mock(text=first_page)
+        next_result = Mock(text=second_page)
+
+        def fake_download(
+            _session,
+            _url,
+            _view_state,
+            _row_index,
+            fallback_name,
+            _form_payload,
+        ):
+            return Path(fallback_name)
+
+        with (
+            patch.object(client, "_open_nfse_query", return_value=query),
+            patch.object(client, "_ajax_post", return_value="state"),
+            patch.object(client, "_request_post", return_value=query_result),
+            patch.object(
+                client,
+                "_request_next_page",
+                side_effect=(next_result, None),
+            ) as next_page,
+            patch.object(
+                client,
+                "_download_xml_with_requests",
+                side_effect=fake_download,
+            ) as download,
+            patch.object(
+                client,
+                "_zip_downloads",
+                return_value=Path("resultado.zip"),
+            ),
+            patch(
+                "nfs_fortaleza.portal._extract_view_state",
+                return_value="state",
+            ),
+        ):
+            result = client._export_competencia_with_requests(
+                session,
+                MonthPeriod(year=2026, month=2),
+                row,
+            )
+
+        self.assertEqual(result, Path("resultado.zip"))
+        self.assertEqual(download.call_count, 2)
+        self.assertEqual(next_page.call_count, 2)
+
 
 class ValidateExportedInscricaoTests(unittest.TestCase):
     def test_accepts_xml_from_selected_inscricao(self) -> None:
@@ -115,6 +177,16 @@ class ValidateExportedInscricaoTests(unittest.TestCase):
                         "Empresa A",
                     ),
                 )
+
+
+class ResultPageFingerprintTests(unittest.TestCase):
+    def test_ignores_view_state_but_not_page_content(self) -> None:
+        first = _result_page_fingerprint("nota A state-1", "state-1")
+        same_page = _result_page_fingerprint("nota A state-2", "state-2")
+        next_page = _result_page_fingerprint("nota B state-3", "state-3")
+
+        self.assertEqual(first, same_page)
+        self.assertNotEqual(first, next_page)
 
 
 def _xml(cnpj: str) -> str:

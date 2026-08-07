@@ -5,6 +5,7 @@ import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
+from hashlib import sha256
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -288,15 +289,24 @@ class PortalClient:
         current_view_state = _extract_view_state(current_text, default=view_state)
 
         downloaded: list[Path] = []
-        seen_pages: set[tuple[str, ...]] = set()
+        seen_pages: set[str] = set()
         page_index = 1
 
         while True:
             row_indexes = _extract_xml_row_indexes(current_text)
-            row_key = tuple(row_indexes)
-            if not row_indexes or row_key in seen_pages:
+            if not row_indexes:
                 break
-            seen_pages.add(row_key)
+
+            page_key = _result_page_fingerprint(
+                current_text,
+                current_view_state,
+            )
+            if page_key in seen_pages:
+                raise RuntimeError(
+                    "Portal repetiu uma pagina da consulta de NFS-e; "
+                    "carga cancelada para evitar resultado parcial."
+                )
+            seen_pages.add(page_key)
 
             for row_position, row_index in enumerate(row_indexes, start=1):
                 prefix = _download_prefix(competencia, inscricao)
@@ -888,6 +898,13 @@ def _extract_xml_row_indexes(text: str) -> list[str]:
     indexes = set(re.findall(r"consultarnfseForm:dataTable:(\d+):j_id374", decoded))
     indexes.update(re.findall(r"consultarnfseForm:dataTable:(\d+):j_id372", decoded))
     return sorted(indexes, key=int)
+
+
+def _result_page_fingerprint(text: str, view_state: str) -> str:
+    decoded = unescape(text)
+    if view_state:
+        decoded = decoded.replace(view_state, "")
+    return sha256(decoded.encode("utf-8")).hexdigest()
 
 
 def _has_enabled_next_page(text: str) -> bool:
