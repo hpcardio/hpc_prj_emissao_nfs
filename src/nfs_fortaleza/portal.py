@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import re
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
+from xml.etree import ElementTree as ET
 
 from dlt.sources.helpers.requests import Response, Session
 
@@ -67,11 +69,39 @@ class PortalClient:
 
         downloaded: list[Path] = []
         ignored: list[str] = []
-        for row in rows:
-            home = self._request_get(session, self.settings.portal_page("home.seam"))
-            self._select_inscricao(session, home, row)
+        for position, discovered_row in enumerate(rows):
+            # Selecting an inscription replaces the selection table with the
+            # current-inscription view. A new session is therefore required
+            # before selecting the next row; reusing its old table index keeps
+            # the first inscription active and exports the same notes again.
+            if position == 0:
+                current_session = session
+                row = discovered_row
+            else:
+                current_session = self._login_dlt_session()
+                current_rows = self._available_inscricoes(current_session)
+                if not current_rows:
+                    raise RuntimeError(
+                        "Portal nao apresentou a lista de inscricoes em uma nova sessao."
+                    )
+                row = _find_inscricao_by_cnpj(
+                    current_rows,
+                    discovered_row.documento,
+                )
+
+            home = self._request_get(
+                current_session,
+                self.settings.portal_page("home.seam"),
+            )
+            self._select_inscricao(current_session, home, row)
             try:
-                downloaded.append(self._export_competencia_with_requests(session, competencia, row))
+                exported = self._export_competencia_with_requests(
+                    current_session,
+                    competencia,
+                    row,
+                )
+                _validate_exported_inscricao(exported, row)
+                downloaded.append(exported)
             except PeriodWithoutInvoicesError:
                 ignored.append(row.label)
 
@@ -751,6 +781,45 @@ def _find_inscricao_by_cnpj(rows: list[InscricaoRow], cnpj: str) -> InscricaoRow
     raise InscricaoNotFoundError(
         f"CNPJ {cnpj} nao encontrado entre as inscricoes disponiveis para o usuario autenticado."
     )
+
+
+def _validate_exported_inscricao(path: Path, inscricao: InscricaoRow) -> None:
+    expected = _digits(inscricao.documento)
+    returned: set[str] = set()
+
+    for xml_content in _iter_exported_xml(path):
+        root = ET.fromstring(xml_content)
+        for identification in root.iter():
+            if _xml_local_name(identification.tag) != "IdentificacaoPrestador":
+                continue
+            for element in identification.iter():
+                if _xml_local_name(element.tag) == "Cnpj" and element.text:
+                    value = _digits(element.text)
+                    if value:
+                        returned.add(value)
+
+    if not returned:
+        raise RuntimeError(
+            "XML exportado nao informa o CNPJ do prestador; carga cancelada."
+        )
+    if returned != {expected}:
+        raise RuntimeError(
+            "XML exportado nao pertence a inscricao selecionada; carga cancelada."
+        )
+
+
+def _iter_exported_xml(path: Path) -> Iterator[bytes]:
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            for member in archive.namelist():
+                if member.lower().endswith(".xml"):
+                    yield archive.read(member)
+        return
+    yield path.read_bytes()
+
+
+def _xml_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
 
 
 def _strip_tags(value: str) -> str:
