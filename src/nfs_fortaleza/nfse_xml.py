@@ -220,7 +220,13 @@ def _mapped_record(node: ET.Element) -> dict[str, Any]:
         "cancelamento_codigo": _text(node, ("Cancelamento", "Confirmacao", "Pedido", "InfPedidoCancelamento", "CodigoCancelamento"), ("CodigoCancelamento",)),
         "cancelamento_data_hora": _text(node, ("Cancelamento", "Confirmacao", "DataHora"), ("DataHoraCancelamento",)),
         "numero_nfse": _text(node, ("Nfse", "InfNfse", "Numero"), ("InfNfse", "Numero")),
-        "competencia_nfse": _text(node, _declaracao_path("Competencia"), ("Competencia",)),
+        "competencia_nfse": _text(
+            node,
+            ("Nfse", "InfNfse", "Competencia"),
+            ("InfNfse", "Competencia"),
+            _declaracao_path("Competencia"),
+            ("Competencia",),
+        ),
         "codigo_verificacao_nfse": _text(
             node,
             ("Nfse", "InfNfse", "CodigoVerificacao"),
