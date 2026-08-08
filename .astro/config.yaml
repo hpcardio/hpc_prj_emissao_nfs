@@ -1,5 +1,7 @@
 airflow:
     expose_port: "true"
+api-server:
+    port: "8082"
 postgres:
     port: 5433
 project:
