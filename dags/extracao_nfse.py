@@ -33,7 +33,7 @@ ARTIFACTS_DIR = Path(
 @dag(
     dag_id="extracao_nfse",
     description="Extrai NFS-e do ISS Fortaleza e carrega a tabela nfse_xml.",
-    schedule=os.getenv("NFSE_EXTRACTION_SCHEDULE", "0 3 * * *"),
+    schedule=os.getenv("NFSE_EXTRACTION_SCHEDULE", "*/15 * * * *"),
     start_date=pendulum.datetime(2026, 1, 1, tz="America/Fortaleza"),
     catchup=False,
     max_active_runs=1,
@@ -51,7 +51,7 @@ def extracao_nfse():
     def extrair_e_carregar() -> dict[str, object]:
         context = get_current_context()
         dag_run = context["dag_run"]
-        reference_date = context["data_interval_start"].in_timezone(
+        reference_date = context["data_interval_end"].in_timezone(
             "America/Fortaleza"
         ).date()
         payload = ExtractionPayload.from_mapping(

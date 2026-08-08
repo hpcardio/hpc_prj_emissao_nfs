@@ -108,7 +108,14 @@ class ExtractionPayload:
                 )
             return cls(periods=tuple(iter_months(start_period, end_period)))
 
-        return cls(periods=(DateRangePeriod(default_date, default_date),))
+        return cls(
+            periods=(
+                MonthPeriod(
+                    year=default_date.year,
+                    month=default_date.month,
+                ),
+            )
+        )
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,8 @@ from nfs_fortaleza.portal import (
     InscricaoRow,
     PortalClient,
     PortalOptions,
+    _extract_enabled_next_page_command_id,
+    _extract_xml_row_command_ids,
     _result_page_fingerprint,
     _validate_exported_inscricao,
 )
@@ -94,12 +96,8 @@ class ExportCompetenciaInscricoesTests(unittest.TestCase):
             url="https://example.test/grpfor/pages/nfse/consulta.seam",
             text="Consultar NFS-e",
         )
-        first_page = (
-            '<a id="consultarnfseForm:dataTable:0:j_id374">Nota A</a>'
-        )
-        second_page = (
-            '<a id="consultarnfseForm:dataTable:0:j_id374">Nota B</a>'
-        )
+        first_page = _xml_export_link("Nota A", "j_id374")
+        second_page = _xml_export_link("Nota B", "j_id376")
         query_result = Mock(text=first_page)
         next_result = Mock(text=second_page)
 
@@ -189,6 +187,53 @@ class ResultPageFingerprintTests(unittest.TestCase):
         self.assertNotEqual(first, next_page)
 
 
+class DynamicCommandIdTests(unittest.TestCase):
+    def test_extracts_xml_command_from_jsf_link_instead_of_table_cell(self) -> None:
+        html = """
+        <td id="consultarnfseForm:dataTable:0:j_id374">
+          <a title="Exportar XML" onclick="if(typeof jsfcljs == 'function'){
+            jsfcljs(document.getElementById('consultarnfseForm'),
+            {'consultarnfseForm:dataTable:0:j_id376':
+             'consultarnfseForm:dataTable:0:j_id376'},'');
+          }return false"></a>
+        </td>
+        <a title="Visualizar" onclick="jsfcljs(
+          document.getElementById('consultarnfseForm'),
+          {'consultarnfseForm:dataTable:0:j_id380':
+           'consultarnfseForm:dataTable:0:j_id380'},'');"></a>
+        """
+
+        self.assertEqual(
+            _extract_xml_row_command_ids(html),
+            ["consultarnfseForm:dataTable:0:j_id376"],
+        )
+
+    def test_extracts_current_enabled_datascroller_command(self) -> None:
+        html = """
+        <td class="rich-datascr-button"><a>&raquo;</a></td>
+        <script>
+          new Richfaces.Datascroller('consultarnfseForm:dataTable:j_id378',
+            function(event) {});
+        </script>
+        """
+
+        self.assertEqual(
+            _extract_enabled_next_page_command_id(html),
+            "consultarnfseForm:dataTable:j_id378",
+        )
+
+    def test_ignores_disabled_next_page_command(self) -> None:
+        html = """
+        <td class="rich-datascr-button-dsbld rich-datascr-button">&raquo;</td>
+        <script>
+          new Richfaces.Datascroller('consultarnfseForm:dataTable:j_id378',
+            function(event) {});
+        </script>
+        """
+
+        self.assertIsNone(_extract_enabled_next_page_command_id(html))
+
+
 def _xml(cnpj: str) -> str:
     return f"""
     <CompNfse>
@@ -200,6 +245,16 @@ def _xml(cnpj: str) -> str:
         </InfNfse>
       </Nfse>
     </CompNfse>
+    """
+
+
+def _xml_export_link(label: str, component_id: str) -> str:
+    command_id = f"consultarnfseForm:dataTable:0:{component_id}"
+    return f"""
+    <a title="Exportar XML" onclick="if(typeof jsfcljs == 'function'){{
+      jsfcljs(document.getElementById('consultarnfseForm'),
+      {{'{command_id}':'{command_id}'}},'');
+    }}return false">{label}</a>
     """
 
 

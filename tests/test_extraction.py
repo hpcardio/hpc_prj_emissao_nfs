@@ -7,11 +7,11 @@ from nfs_fortaleza.extraction import (
     ExtractionConfigurationError,
     ExtractionPayload,
 )
-from nfs_fortaleza.periods import DateRangePeriod, MonthPeriod
+from nfs_fortaleza.periods import MonthPeriod
 
 
 class ExtractionPayloadTests(unittest.TestCase):
-    def test_scheduled_run_defaults_to_airflow_interval_date(self) -> None:
+    def test_scheduled_run_defaults_to_current_month(self) -> None:
         payload = ExtractionPayload.from_mapping(
             {},
             default_date=date(2026, 7, 22),
@@ -19,7 +19,7 @@ class ExtractionPayloadTests(unittest.TestCase):
 
         self.assertEqual(
             payload.periods,
-            (DateRangePeriod(date(2026, 7, 22), date(2026, 7, 22)),),
+            (MonthPeriod(2026, 7),),
         )
 
     def test_accepts_single_nfse_query(self) -> None:

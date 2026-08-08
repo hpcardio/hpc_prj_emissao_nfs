@@ -22,7 +22,7 @@ Emissão e extração são funcionalidades independentes:
 | DAG | Responsabilidade | Disparo |
 | --- | --- | --- |
 | `emissao_nfse` | Emitir solicitações aprovadas, baixar o PDF e registrar o resultado | Manual ou API REST, sem agendamento |
-| `extracao_nfse` | Consultar notas existentes, baixar XML e carregar `nfse_xml` | Diariamente às 03:00 ou manualmente |
+| `extracao_nfse` | Consultar notas existentes, baixar XML e carregar `nfse_xml` | A cada 15 minutos ou manualmente |
 
 ```mermaid
 flowchart LR
@@ -604,11 +604,19 @@ normalizados em `POSTGRES_SCHEMA.nfse_xml`.
 
 ### Agenda e filtros da DAG
 
-Por padrão, `extracao_nfse` executa diariamente às 03:00. A agenda pode ser
-alterada por `NFSE_EXTRACTION_SCHEDULE`.
+Por padrão, `extracao_nfse` executa a cada 15 minutos, usando a expressão
+`*/15 * * * *`. A agenda pode ser alterada por `NFSE_EXTRACTION_SCHEDULE`.
 
-Uma execução agendada consulta o dia representado pelo início do intervalo de
-dados do Airflow. Execuções manuais aceitam somente um dos formatos abaixo.
+Uma execução agendada sem configuração consulta a competência corrente, do
+primeiro dia do mês até o dia atual. Antes da carga, o pipeline consulta
+`POSTGRES_SCHEMA.nfse_xml` e descarta as notas já existentes pela chave
+`codigo_verificacao_nfse`; se essa chave não existir no XML, usa CNPJ do
+prestador e número da NFS-e. Assim, somente notas inéditas são enviadas ao
+`dlt` e ao PostgreSQL.
+
+Execuções manuais preservam a consulta de qualquer competência no formato
+`mm/aaaa` por meio de `dag_run.conf`. Também são aceitos os demais formatos
+abaixo.
 
 Competência:
 
