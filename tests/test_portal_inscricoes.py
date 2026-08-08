@@ -234,6 +234,35 @@ class DynamicCommandIdTests(unittest.TestCase):
         self.assertIsNone(_extract_enabled_next_page_command_id(html))
 
 
+class ExportFormPayloadTests(unittest.TestCase):
+    def setUp(self) -> None:
+        settings = Settings(
+            portal_url="https://example.test/grpfor/home.seam",
+            cpf_login="00000000000",
+            senha="secret",
+            database_url="postgresql://example.test/db",
+            postgres_schema="test",
+        )
+        self.client = PortalClient(settings)
+
+    def test_period_payload_does_not_submit_unrelated_actions(self) -> None:
+        payload = self.client._form_payload(
+            MonthPeriod(year=2026, month=8),
+            "state",
+        )
+
+        self.assertFalse(
+            any(key.startswith("consultarnfseForm:j_id") for key in payload)
+        )
+
+    def test_number_payload_does_not_submit_unrelated_actions(self) -> None:
+        payload = self.client._number_form_payload("123", "state")
+
+        self.assertFalse(
+            any(key.startswith("consultarnfseForm:j_id") for key in payload)
+        )
+
+
 def _xml(cnpj: str) -> str:
     return f"""
     <CompNfse>

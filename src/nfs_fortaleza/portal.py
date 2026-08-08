@@ -473,11 +473,6 @@ class PortalClient:
             "consultarnfseForm:dataFinalInputDate": end_date,
             "consultarnfseForm:dataFinalInputCurrentDate": competencia.end_month_year_br,
             "consultarnfseForm:opTomadorPeriodoEmissao": "2",
-            "consultarnfseForm:j_id237": "Consultar",
-            "consultarnfseForm:j_id238": "Limpar",
-            "consultarnfseForm:j_id323": "Exportar XLS do Resultado da Consulta",
-            "consultarnfseForm:j_id324": "Selecionar todas da página atual",
-            "consultarnfseForm:j_id325": "Exportar XML das Notas Selecionadas",
             "javax.faces.ViewState": view_state,
         }
 
@@ -497,11 +492,6 @@ class PortalClient:
             "consultarnfseForm": "consultarnfseForm",
             "consultarnfseForm:opTipoRelatorio": "1",
             "consultarnfseForm:numNfse": numero_nfse,
-            "consultarnfseForm:j_id237": "Consultar",
-            "consultarnfseForm:j_id238": "Limpar",
-            "consultarnfseForm:j_id323": "Exportar XLS do Resultado da Consulta",
-            "consultarnfseForm:j_id324": "Selecionar todas da página atual",
-            "consultarnfseForm:j_id325": "Exportar XML das Notas Selecionadas",
             "javax.faces.ViewState": view_state,
         }
 
