@@ -11,6 +11,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree as ET
+from zoneinfo import ZoneInfo
 
 from dlt.sources.helpers.requests import Response, Session
 
@@ -35,6 +36,7 @@ class PortalOptions:
     downloads_dir: Path = DEFAULT_DOWNLOADS_DIR
     artifacts_dir: Path = DEFAULT_ARTIFACTS_DIR
     timeout_ms: int = 45_000
+    query_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -53,12 +55,15 @@ class PortalClient:
     def __init__(self, settings: Settings, options: PortalOptions | None = None) -> None:
         self.settings = settings
         self.options = options or PortalOptions()
+        self.query_date = self.options.query_date or datetime.now(
+            ZoneInfo("America/Fortaleza")
+        ).date()
 
     def export_competencia(self, competencia: QueryPeriod) -> list[Path]:
         self.options.downloads_dir.mkdir(parents=True, exist_ok=True)
         self.options.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        if competencia.first_day > date.today():
+        if competencia.first_day > self.query_date:
             raise PeriodWithoutInvoicesError(
                 f"Competencia {competencia.mm_yyyy} esta no futuro; a data inicial seria maior que hoje."
             )
@@ -448,7 +453,8 @@ class PortalClient:
         return _extract_view_state(response.text, default=current_view_state)
 
     def _query_payload(self, competencia: QueryPeriod, view_state: str) -> dict[str, str]:
-        end_date = competencia.query_end_day_br()
+        query_end_day = competencia.query_end_day(self.query_date)
+        end_date = query_end_day.strftime("%d/%m/%Y")
         return {
             "AJAXREQUEST": "_viewRoot",
             "consultarnfseForm": "consultarnfseForm",
@@ -456,7 +462,7 @@ class PortalClient:
             "consultarnfseForm:dataInicialInputDate": competencia.first_day_br,
             "consultarnfseForm:dataInicialInputCurrentDate": competencia.start_month_year_br,
             "consultarnfseForm:dataFinalInputDate": end_date,
-            "consultarnfseForm:dataFinalInputCurrentDate": competencia.end_month_year_br,
+            "consultarnfseForm:dataFinalInputCurrentDate": query_end_day.strftime("%m/%Y"),
             "consultarnfseForm:opTomadorPeriodoEmissao": "2",
             "javax.faces.ViewState": view_state,
             "consultarnfseForm:j_id237": "consultarnfseForm:j_id237",
@@ -464,14 +470,15 @@ class PortalClient:
         }
 
     def _form_payload(self, competencia: QueryPeriod, view_state: str) -> dict[str, str]:
-        end_date = competencia.query_end_day_br()
+        query_end_day = competencia.query_end_day(self.query_date)
+        end_date = query_end_day.strftime("%d/%m/%Y")
         return {
             "consultarnfseForm": "consultarnfseForm",
             "consultarnfseForm:opTipoRelatorio": "1",
             "consultarnfseForm:dataInicialInputDate": competencia.first_day_br,
             "consultarnfseForm:dataInicialInputCurrentDate": competencia.start_month_year_br,
             "consultarnfseForm:dataFinalInputDate": end_date,
-            "consultarnfseForm:dataFinalInputCurrentDate": competencia.end_month_year_br,
+            "consultarnfseForm:dataFinalInputCurrentDate": query_end_day.strftime("%m/%Y"),
             "consultarnfseForm:opTomadorPeriodoEmissao": "2",
             "javax.faces.ViewState": view_state,
         }

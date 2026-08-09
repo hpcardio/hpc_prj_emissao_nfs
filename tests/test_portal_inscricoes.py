@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
@@ -260,6 +261,26 @@ class ExportFormPayloadTests(unittest.TestCase):
 
         self.assertFalse(
             any(key.startswith("consultarnfseForm:j_id") for key in payload)
+        )
+
+    def test_period_payload_uses_fortaleza_query_date(self) -> None:
+        client = PortalClient(
+            self.client.settings,
+            PortalOptions(query_date=date(2026, 8, 8)),
+        )
+
+        payload = client._form_payload(
+            MonthPeriod(year=2026, month=8),
+            "state",
+        )
+
+        self.assertEqual(
+            payload["consultarnfseForm:dataFinalInputDate"],
+            "08/08/2026",
+        )
+        self.assertEqual(
+            payload["consultarnfseForm:dataFinalInputCurrentDate"],
+            "08/2026",
         )
 
 

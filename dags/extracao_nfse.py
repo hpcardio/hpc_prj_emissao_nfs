@@ -69,6 +69,7 @@ def extracao_nfse():
             options=PortalOptions(
                 downloads_dir=DOWNLOADS_DIR,
                 artifacts_dir=ARTIFACTS_DIR,
+                query_date=reference_date,
             ),
         )
         return summary.as_dict()
