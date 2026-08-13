@@ -1,0 +1,20 @@
+name: glosas_ipm
+version: '1.0.0'
+config-version: 2
+
+profile: glosas_ipm
+model-paths: ['models']
+macro-paths: ['macros']
+clean-targets: ['target', 'dbt_packages']
+
+models:
+  glosas_ipm:
+    staging:
+      +materialized: view
+      +schema: api_prontocardio_staging
+    intermediate:
+      +materialized: table
+      +schema: api_prontocardio_intermediate
+    marts:
+      +materialized: table
+      +schema: api_prontocardio

@@ -26,7 +26,13 @@ def test_dags_import_without_errors() -> None:
     assert not errors, "\n".join(
         f"{path}: {error}" for path, error in sorted(errors.items())
     )
-    expected_dags = {"emissao_nfse", "extracao_nfse"}
+    expected_dags = {
+        "emissao_nfse",
+        "extracao_demonstrativo_conta_ipm",
+        "extracao_nfse",
+        "extracao_processos_virtuais_spu",
+        "materializacao_glosas_ipm",
+    }
     assert expected_dags.issubset(dag_bag.dag_ids), (
         f"DAGs ausentes: {sorted(expected_dags - set(dag_bag.dag_ids))}"
     )

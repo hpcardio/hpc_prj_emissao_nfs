@@ -1,0 +1,24 @@
+version: 2
+
+models:
+  - name: int_ipm_processos_remessas
+    columns:
+      - name: numero_processo
+        tests: [not_null]
+      - name: cd_remessa
+        tests: [not_null]
+
+  - name: int_ipm_glosas_resolvidas
+    columns:
+      - name: id_registro
+        tests: [not_null, unique]
+
+  - name: glosas_ipm_vinculadas
+    columns:
+      - name: id_registro
+        tests: [not_null, unique]
+
+  - name: glossas_nao_vinculadas_ipm
+    columns:
+      - name: id_registro
+        tests: [not_null, unique]

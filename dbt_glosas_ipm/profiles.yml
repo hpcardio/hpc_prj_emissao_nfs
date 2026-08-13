@@ -1,0 +1,14 @@
+glosas_ipm:
+  target: railway
+  outputs:
+    railway:
+      type: postgres
+      host: "{{ env_var('DBT_POSTGRES_HOST') }}"
+      port: "{{ env_var('DBT_POSTGRES_PORT', '5432') | int }}"
+      user: "{{ env_var('DBT_POSTGRES_USER') }}"
+      password: "{{ env_var('DBT_POSTGRES_PASSWORD') }}"
+      dbname: "{{ env_var('DBT_POSTGRES_DBNAME') }}"
+      schema: api_prontocardio
+      threads: 4
+      connect_timeout: 20
+      sslmode: "{{ env_var('DBT_POSTGRES_SSLMODE', 'prefer') }}"
