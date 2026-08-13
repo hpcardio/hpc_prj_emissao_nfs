@@ -1,14 +1,31 @@
 services:
+  spu-novnc:
+    build:
+      context: .
+      dockerfile: docker/novnc/Dockerfile
+    environment:
+      DISPLAY: ":99"
+      SPU_NOVNC_PASSWORD: "${SPU_NOVNC_PASSWORD:?Defina SPU_NOVNC_PASSWORD no .env}"
+      SPU_NOVNC_SCREEN: "${SPU_NOVNC_SCREEN:-1600x900x24}"
+    ports:
+      - "127.0.0.1:${SPU_NOVNC_PORT:-6080}:6080"
+    restart: unless-stopped
+    volumes:
+      - spu_x11:/tmp/.X11-unix
+
   webserver:
     volumes:
       - nfse_data:/usr/local/airflow/data
 
   scheduler:
+    depends_on:
+      spu-novnc:
+        condition: service_healthy
     environment:
-      DISPLAY: "${DISPLAY:-:0}"
+      DISPLAY: ":99"
     volumes:
       - nfse_data:/usr/local/airflow/data
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - spu_x11:/tmp/.X11-unix
 
   triggerer:
     volumes:
@@ -16,3 +33,4 @@ services:
 
 volumes:
   nfse_data:
+  spu_x11:

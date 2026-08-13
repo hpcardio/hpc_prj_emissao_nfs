@@ -39,6 +39,7 @@ POSTGRES_SCHEMA = os.getenv("POSTGRES_SCHEMA", "api_prontocardio")
 DOWNLOADS_DIR = Path(
     os.getenv("SPU_DOWNLOADS_DIR", "/usr/local/airflow/data/spu")
 )
+NOVNC_PORT = os.getenv("SPU_NOVNC_PORT", "6080")
 
 
 def _execute_with_session_renewal(
@@ -53,7 +54,10 @@ def _execute_with_session_renewal(
 
         LOGGER.warning(
             "Sessao SPU expirada. Abrindo a renovacao interativa no "
-            "navegador visivel do scheduler."
+            "navegador visivel do scheduler. Acesse o desktop protegido "
+            "pelo tunel SSH em "
+            f"http://localhost:{NOVNC_PORT}/vnc.html?autoconnect=true"
+            "&resize=scale."
         )
         try:
             renew_spu_session(settings)
