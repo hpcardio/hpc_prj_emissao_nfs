@@ -4,8 +4,11 @@ services:
       - nfse_data:/usr/local/airflow/data
 
   scheduler:
+    environment:
+      DISPLAY: "${DISPLAY:-:0}"
     volumes:
       - nfse_data:/usr/local/airflow/data
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
   triggerer:
     volumes:

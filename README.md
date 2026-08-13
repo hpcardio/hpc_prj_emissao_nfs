@@ -1,11 +1,12 @@
-# NFS-e Fortaleza com Astro, Airflow e dlt
+# Automações fiscais e assistenciais com Astro, Airflow e dlt
 
 Automação para emitir NFS-e, consultar notas emitidas, baixar PDF/XML e
-carregar dados fiscais no PostgreSQL.
+carregar dados fiscais no PostgreSQL. O projeto também extrai demonstrativos
+de contas médicas do Portal Credenciado IPM Saúde.
 
-O projeto não usa automação visual de navegador. A comunicação com o portal
-ISS Fortaleza é feita pelos endpoints HTTP JSF/Seam, preservando cookies,
-conversação e `javax.faces.ViewState`.
+Para o portal ISS Fortaleza, o projeto usa endpoints HTTP JSF/Seam,
+preservando cookies, conversação e `javax.faces.ViewState`. O SPU exige um
+navegador Chromium para a paginação e reutiliza um perfil isolado autenticado.
 
 ## Sumário
 
@@ -13,6 +14,9 @@ conversação e `javax.faces.ViewState`.
 - [Configuração compartilhada](#configuração-compartilhada)
 - [Emissão de NFS-e — `emissao_nfse`](#emissão-de-nfs-e--emissao_nfse)
 - [Extração de NFS-e — `extracao_nfse`](#extração-de-nfs-e--extracao_nfse)
+- [Demonstrativo IPM — `extracao_demonstrativo_conta_ipm`](#demonstrativo-ipm--extracao_demonstrativo_conta_ipm)
+- [Processos SPU — `extracao_processos_virtuais_spu`](#processos-spu--extracao_processos_virtuais_spu)
+- [Materialização das glosas IPM com dbt](#materialização-das-glosas-ipm-com-dbt)
 - [Testes](#testes)
 
 ## Visão geral
@@ -22,17 +26,30 @@ Emissão e extração são funcionalidades independentes:
 | DAG | Responsabilidade | Disparo |
 | --- | --- | --- |
 | `emissao_nfse` | Emitir solicitações aprovadas, baixar o PDF e registrar o resultado | Manual ou API REST, sem agendamento |
-| `extracao_nfse` | Consultar notas existentes, baixar XML e carregar `nfse_xml` | Diariamente às 03:00 ou manualmente |
+| `extracao_nfse` | Consultar notas existentes, baixar XML e carregar `nfse_xml` | A cada 15 minutos ou manualmente |
+| `extracao_demonstrativo_conta_ipm` | Extrair contas médicas e carregar `demonstrativo_conta_ipm` | Diariamente às 04:00 ou manualmente |
+| `extracao_processos_virtuais_spu` | Extrair processos e PDFs IPM do SPU | Diariamente às 05:00 ou manualmente |
+| `materializacao_glosas_ipm` | Carregar o estágio Oracle e executar as sete regras no dbt | Acionada ao término das extrações IPM/SPU |
 
 ```mermaid
 flowchart LR
     API[api_prontocardio] -->|lote_id + IDs| AIRFLOW[Airflow/Astro]
     AIRFLOW --> EMISSAO[DAG emissao_nfse]
     AIRFLOW --> EXTRACAO[DAG extracao_nfse]
+    AIRFLOW --> IPM_DAG[DAG demonstrativo IPM]
+    AIRFLOW --> SPU_DAG[DAG processos SPU]
     EMISSAO -->|Lê e atualiza solicitações| PG[(PostgreSQL)]
     EMISSAO -->|Emite e baixa PDF| ISS[ISS Fortaleza]
     EXTRACAO -->|Consulta e baixa XML| ISS
     EXTRACAO -->|dlt merge| NFSE[(nfse_xml)]
+    IPM_DAG -->|API e arquivo nativo| IPM[Portal IPM Saúde]
+    IPM_DAG -->|dlt merge por referência| IPM_TABLE[(demonstrativo_conta_ipm)]
+    SPU_DAG -->|Navega e baixa PDFs| SPU[SPU Virtual]
+    SPU_DAG -->|dlt merge por processo| SPU_TABLES[(Tabelas SPU)]
+    IPM_DAG --> DBT_DAG[DAG materialização dbt]
+    SPU_DAG --> DBT_DAG
+    DBT_DAG -->|carga intermediária| STAGE[(Tabelas staging Oracle)]
+    DBT_DAG -->|dbt build| MARTS[(Vinculadas e não vinculadas)]
 ```
 
 As DAGs compartilham somente a infraestrutura, as credenciais do portal e a
@@ -55,7 +72,11 @@ operacional ficam separados nas seções de cada funcionalidade.
 ├── .astro/
 ├── dags/
 │   ├── emissao_nfse.py
+│   ├── extracao_demonstrativo_conta_ipm.py
+│   ├── extracao_processos_virtuais_spu.py
+│   ├── materializacao_glosas_ipm.py
 │   └── extracao_nfse.py
+├── dbt_glosas_ipm/
 ├── include/
 ├── plugins/
 ├── src/
@@ -65,6 +86,16 @@ operacional ficam separados nas seções de cada funcionalidade.
 │       ├── config.py
 │       ├── extraction.py
 │       ├── issuance.py
+│       ├── ipm_config.py
+│       ├── ipm_demonstrativo.py
+│       ├── ipm_extraction.py
+│       ├── ipm_portal.py
+│       ├── spu_auth.py
+│       ├── spu_config.py
+│       ├── spu_extraction.py
+│       ├── spu_pdf.py
+│       ├── spu_portal.py
+│       ├── spu_resources.py
 │       ├── load.py
 │       ├── nfse_xml.py
 │       ├── periods.py
@@ -98,6 +129,10 @@ DATABASE_URL=postgresql+psycopg://usuario:senha@host:5432/banco
 POSTGRES_SCHEMA=api_prontocardio
 NFSE_POSTGRES_CONN_ID=postgres_prontocardio
 AIRFLOW_CONN_POSTGRES_PRONTOCARDIO=postgresql://usuario:senha@host:5432/banco
+
+IPM_PORTAL_URL=https://ipmsaude.topsaudehub.com.br/PortalCredenciado
+IPM_LOGIN=LOGIN_DO_PRESTADOR
+IPM_PASSWORD='SENHA_DO_PORTAL'
 ```
 
 Nos disparos feitos pela API, `dag_run.conf.cnpj_por_solicitacao`
@@ -604,11 +639,19 @@ normalizados em `POSTGRES_SCHEMA.nfse_xml`.
 
 ### Agenda e filtros da DAG
 
-Por padrão, `extracao_nfse` executa diariamente às 03:00. A agenda pode ser
-alterada por `NFSE_EXTRACTION_SCHEDULE`.
+Por padrão, `extracao_nfse` executa a cada 15 minutos, usando a expressão
+`*/15 * * * *`. A agenda pode ser alterada por `NFSE_EXTRACTION_SCHEDULE`.
 
-Uma execução agendada consulta o dia representado pelo início do intervalo de
-dados do Airflow. Execuções manuais aceitam somente um dos formatos abaixo.
+Uma execução agendada sem configuração consulta a competência corrente, do
+primeiro dia do mês até o dia atual. Antes da carga, o pipeline consulta
+`POSTGRES_SCHEMA.nfse_xml` e descarta as notas já existentes pela chave
+`codigo_verificacao_nfse`; se essa chave não existir no XML, usa CNPJ do
+prestador e número da NFS-e. Assim, somente notas inéditas são enviadas ao
+`dlt` e ao PostgreSQL.
+
+Execuções manuais preservam a consulta de qualquer competência no formato
+`mm/aaaa` por meio de `dag_run.conf`. Também são aceitos os demais formatos
+abaixo.
 
 Competência:
 
@@ -808,6 +851,274 @@ link `Exportar XML` de cada linha e envia o formulário com o
 Falhas de login, navegação, sessão ou mudança do portal geram HTML de
 diagnóstico em `.artifacts/`.
 
+## Demonstrativo IPM — `extracao_demonstrativo_conta_ipm`
+
+A DAG autentica no Portal Credenciado, consulta `Demonstrativos >
+Demonstrativo de Conta Médica`, gera o arquivo nativo de cada referência e
+carrega `POSTGRES_SCHEMA.demonstrativo_conta_ipm` com `dlt`.
+
+portal com as já existentes na tabela e extrai somente referências inéditas.
+`IPM_EXTRACTION_SCHEDULE` altera a agenda. Em uma execução manual, é possível
+restringir o escopo:
+
+```json
+{"referencia": "05/2026"}
+```
+
+Ou selecionar várias referências:
+```json
+{"referencias": ["12/2025", "01/2026", "05/2026"]}
+```
+
+Mesmo quando informada manualmente, uma referência já presente na tabela é
+ignorada e não é baixada novamente.
+
+Disparo REST de exemplo:
+
+```bash
+curl -u "admin:admin" \
+  -X POST \
+  "http://localhost:8082/api/v1/dags/extracao_demonstrativo_conta_ipm/dagRuns" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dag_run_id":"ipm_202605",
+    "conf":{"referencia":"05/2026"}
+  }'
+```
+
+### Variáveis do IPM
+
+| Variável | Padrão/uso |
+| --- | --- |
+| `IPM_PORTAL_URL` | URL do Portal Credenciado |
+| `IPM_LOGIN` | Login do prestador |
+| `IPM_PASSWORD` | Senha do prestador |
+| `IPM_PROVIDER_CODE` | Opcional; usa `IPM_LOGIN` por padrão |
+| `IPM_OPERATOR_CODE` | `1` |
+| `IPM_POSTGRES_CONN_ID` | `postgres_prontocardio` |
+| `IPM_EXTRACTION_SCHEDULE` | `0 4 * * *` |
+| `IPM_DOWNLOADS_DIR` | `/usr/local/airflow/data/ipm` |
+| `IPM_TIMEOUT_SECONDS` | `60` |
+
+As credenciais reais ficam somente no `.env`, que está ignorado pelo Git.
+Em produção, use as variáveis/segredos do deployment Airflow.
+
+### Dados e atualização
+
+Cada linha representa um serviço executado e repete os dados de referência,
+lote, protocolo, guia e beneficiário necessários para consulta direta. Datas
+são carregadas como `date`, valores como `decimal` e códigos como texto para
+preservar zeros à esquerda.
+
+A tabela PostgreSQL é consultada antes de qualquer arquivo ser solicitado ao
+portal. Referências encontradas em `demonstrativo_conta_ipm` são ignoradas;
+quando não há referência nova, a execução termina com sucesso sem download e
+sem iniciar uma carga `dlt`. Na primeira execução, a ausência da tabela é
+tratada como histórico vazio.
+
+A chave técnica `id_registro` é determinística e a carga mantém `merge` com
+`referencia` como chave da janela, oferecendo uma segunda proteção contra
+duplicidade.
+
+O arquivo TXT do portal apresenta os rótulos de lote e protocolo invertidos.
+O parser aplica os significados confirmados na tela HTML: o valor `TISS_...`
+é armazenado em `numero_lote`, e o identificador numérico em
+`numero_protocolo`.
+
+As colunas funcionais são:
+
+- `referencia`, `cnpj_operadora`, `numero_lote`, `data_envio_lote`;
+- `numero_protocolo`, `valor_protocolo`, `valor_glosa_protocolo`;
+- `numero_guia_senha`, `nome_beneficiario`, `codigo_beneficiario`;
+- `data_realizacao`, `descricao_servico`, `codigo_tabela`, `codigo_servico`;
+- `grau_participacao`, `quantidade_executada`;
+- `valor_processado`, `valor_liberado`, `valor_glosa`, `codigo_glosa`.
+
+## Processos SPU — `extracao_processos_virtuais_spu`
+
+A DAG tem duas etapas. `carregar_processos` percorre as páginas de
+**Processos Virtuais**, coleta número, status, tipo/assunto, data de abertura
+e motivo da finalização e grava os registros com dlt a cada lote, sem esperar
+o fim da paginação. Depois, `processar_pdfs` consulta somente os finalizados
+pendentes e acessa a árvore materializada. Somente os documentos de
+`IPM/SAUDECOGESTAO` e `IPM/NUEXO` são baixados.
+
+O log informa cada página consultada, os totais de processos novos e já
+carregados, cada lote enviado ao PostgreSQL e o andamento individual dos
+processos na etapa de PDFs. Um status não reconhecido é armazenado como
+`DESCONHECIDO` e gera um alerta no log, sem interromper toda a paginação.
+
+Os PDFs são obtidos pelo endpoint autenticado de cada item da árvore, sem
+cliques no visualizador. `pdfplumber` processa todas as páginas, ignora
+cabeçalhos repetidos e reúne as linhas da tabela de contas quando ela continua
+na página seguinte.
+
+### Tabelas dlt
+
+| Tabela | Conteúdo |
+| --- | --- |
+| `processos_ipm` | Uma linha por processo, com status atual, tipo/assunto, abertura e motivo |
+| `processos_historico_ipm` | Histórico idempotente das situações observadas |
+| `processos_ipm_saude_cogestao` | Tabela multipágina dos PDFs `IPM/SAUDECOGESTAO` |
+| `processos_empenho_ipm` | Banco, código da conta, código da agência e conta dos EMPENHOS em `IPM/NUEXO` |
+| `processos_nota_fiscal_ipm` | Número, chave de acesso e prestador das NFS-e em `IPM/NUEXO` |
+
+A antiga tabela mista foi migrada para as duas tabelas específicas e preservada
+como `processos_ipm_nuexo_legacy`; a DAG não realiza novas cargas nela.
+Em EMPENHO, o antigo valor composto `banco_agencia` é armazenado separadamente
+em `codigo_conta` e `codigo_agencia`; o nome da instituição permanece em
+`banco`.
+
+Os pares repetidos do PDF de cogestão são diferenciados por
+`valor_aprovado_producao`, `valor_glosado_producao`,
+`valor_aprovado_protocolo` e `valor_glosado_protocolo`. Identificadores são
+texto, datas são `date` e valores são `decimal(18,2)`.
+O layout de revisão também preenche `nr_origem` e `processo_recurso`, interpreta
+`Valor Aprovado Rev` como valor aprovado do protocolo, `Valor Liberado` como
+valor aprovado do resumo e `R$ -` como zero.
+
+### Incrementalidade
+
+Antes de materializar ou baixar PDFs, a DAG consulta
+`processos_ipm`. Um número já carregado com o mesmo status é
+ignorado. Quando um processo muda de `TRAMITANDO` para `FINALIZADO`, essa nova
+situação é processada uma única vez para que os PDFs e o motivo da finalização
+não sejam perdidos.
+
+Na execução incremental padrão, a listagem — ordenada pelo SPU dos registros
+mais recentes para os mais antigos — é interrompida depois de duas páginas
+consecutivas contendo somente processos já carregados e sem mudança de status.
+Uma página com processo novo, status alterado ou detalhamento finalizado
+pendente zera esse contador. Assim, a DAG não percorre novamente todo o
+histórico em cada execução. Para uma reconciliação deliberada de todas as
+páginas, use `{"varredura_completa": true}` no disparo manual.
+
+`detalhes_finalizados_extraidos` só recebe `true` depois que os documentos
+disponíveis dos setores alvo são processados. Setores ausentes e formatos
+históricos sem todos os campos são registrados no log sem interromper o lote;
+processos finalizados sem o botão `VISUALIZAR PROCESSO` são concluídos sem
+documentos, pois não há árvore materializada disponível;
+falhas técnicas de navegação ou download mantêm o processo pendente para a
+próxima tentativa. As cinco tabelas usam chaves determinísticas e carga
+`merge`; a DAG também usa `max_active_runs=1`.
+
+### Autenticação
+
+As credenciais reais permanecem apenas no `.env`, ignorado pelo Git. O SPU
+usa uma validação reCAPTCHA invisível: no acesso humano ela normalmente não
+mostra desafio, mas passa a exigir imagens quando detecta automação no login.
+Por isso a DAG nunca envia o formulário. Ao receber um redirecionamento para
+`/auth/login`, ela fecha a navegação headless, abre uma janela Chromium
+visível usando o mesmo perfil persistente, preenche `SPU_LOGIN`,
+`SPU_PASSWORD` e **Relembrar?** e aguarda a ação humana. O usuário conclui o
+reCAPTCHA, se solicitado, e clica em **Entrar**. Quando o portal sair da tela
+de login, a janela é fechada automaticamente e a operação interrompida é
+executada novamente na mesma tarefa.
+
+No Astro local, `docker-compose.override.yml` encaminha `DISPLAY` e o socket
+X11 para o scheduler. Reinicie os containers depois de habilitar esse fluxo.
+As credenciais são usadas apenas para preencher os campos no navegador e não
+são escritas no log, no URL nem em arquivos auxiliares.
+
+O mesmo fluxo pode ser iniciado manualmente para preparar ou validar o perfil:
+
+```bash
+.venv/bin/python -m nfs_fortaleza.spu_auth \
+  --browser-profile downloads/spu/browser_profile \
+  --executable-path /usr/bin/chromium-browser
+```
+
+O utilitário também preenche os dados, aguarda o login e valida a primeira
+página. O perfil contém cookies de autenticação: não o versione nem o envie
+por e-mail. No Docker, o volume nomeado `nfse_data` mantém esse perfil após
+reinícios. Um lock de arquivo impede que a extração headless e a renovação
+visível abram o mesmo perfil simultaneamente.
+
+Em um scheduler sem sessão gráfica, desative a abertura com
+`SPU_AUTO_RENEW_SESSION=false` e renove o perfil com o utilitário em uma
+máquina que tenha navegador visível. `SPU_STORAGE_STATE_PATH` continua
+disponível para ambientes que já provisionem um arquivo Playwright
+`storage_state`.
+
+### Variáveis do SPU
+
+| Variável | Padrão/uso |
+| --- | --- |
+| `SPU_PORTAL_URL` | `https://spuvirtual.sepog.fortaleza.ce.gov.br` |
+| `SPU_MATERIALIZER_URL` | `https://spumaterializar.sepog.fortaleza.ce.gov.br` |
+| `SPU_LOGIN` / `SPU_PASSWORD` | Credenciais da pessoa jurídica |
+| `SPU_POSTGRES_CONN_ID` | `postgres_prontocardio` |
+| `SPU_EXTRACTION_SCHEDULE` | `0 5 * * *` |
+| `SPU_DOWNLOADS_DIR` | `/usr/local/airflow/data/spu` |
+| `SPU_BROWSER_PROFILE_DIR` | `/usr/local/airflow/data/spu/browser_profile` |
+| `SPU_STORAGE_STATE_PATH` | `/usr/local/airflow/data/spu/auth_state.json` |
+| `SPU_BROWSER_HEADLESS` | `true` na DAG |
+| `SPU_AUTO_RENEW_SESSION` | `true`; abre a janela de login quando a sessão expira |
+| `SPU_AUTH_TIMEOUT_SECONDS` | `1800`; tempo para o usuário concluir o login |
+| `SPU_PAGE_TIMEOUT_SECONDS` | `90` |
+| `SPU_DOWNLOAD_DELAY_SECONDS` | `0.75` segundo entre downloads; respostas 429 usam retentativa exponencial |
+| `SPU_PROCESS_BATCH_SIZE` | `50` processos por carga durante a paginação |
+| `SPU_PDF_BATCH_SIZE` | `20` processos finalizados por carga de PDFs |
+
+Um disparo manual pode limitar páginas para diagnóstico ou selecionar
+processos específicos. `varredura_completa` desativa somente a interrupção
+incremental por páginas já conhecidas:
+
+```json
+{
+  "numero_processos": ["P193251/2026"],
+  "max_pages": 3,
+  "varredura_completa": false
+}
+```
+
+Sem payload, a DAG usa a paginação incremental.
+
+## Materialização das glosas IPM com dbt
+
+A DAG `materializacao_glosas_ipm` é acionada ao término das cargas do
+demonstrativo IPM e dos processos SPU. A integração não usa Airflow Datasets.
+Os dois disparos são seguros porque a DAG aceita somente uma execução ativa;
+a execução posterior recompõe os resultados com o estado mais recente das
+duas fontes.
+
+Primeiro, a DAG copia o recorte necessário da
+`DBAMV.HPC_V_CONTA_ATENDIMENTO` para tabelas intermediárias no mesmo
+PostgreSQL/Railway utilizado pela aplicação:
+
+| Tabela | Finalidade |
+| --- | --- |
+| `api_prontocardio_staging.ipm_remessas_oracle` | Total da remessa por competência, calculado pelo `MAX(vl_total_conta)` interno e `SUM` externo |
+| `api_prontocardio_staging.ipm_itens_oracle` | Contas e lançamentos Oracle necessários às sete regras |
+
+O intervalo Oracle é limitado do primeiro mês ao mês posterior às glosas
+positivas existentes em `demonstrativo_processos_ipm`. A troca do estágio é
+transacional: uma falha antes do `commit` mantém a versão anterior disponível.
+
+Depois, `dbt build` cria as tabelas de trabalho no schema
+`api_prontocardio_intermediate`. A associação demonstrativo/processo lê
+exclusivamente `api_prontocardio.demonstrativo_processos_ipm`; processo e
+remessa são associados por competência, valor do protocolo e total calculado
+da remessa. As sete regras são avaliadas em prioridade e somente uma conta
+segura é aceita. Uma linha ambígua ou não encontrada não cancela as demais
+linhas da remessa.
+
+Os resultados finais são:
+
+| Tabela | Conteúdo |
+| --- | --- |
+| `api_prontocardio.glosas_ipm_vinculadas` | Itens associados com processo, remessa, paciente, conta e lançamento |
+| `api_prontocardio.glossas_nao_vinculadas_ipm` | Itens sem vínculo seguro e o motivo da pendência |
+
+As conexões são `IPM_POSTGRES_CONN_ID` e `IPM_ORACLE_CONN_ID`. Não existe
+banco local para esta carga; ambos devem apontar para as fontes efetivas e o
+destino PostgreSQL deve ser o Railway.
+
+O Oracle é aberto em Thick Mode com o Instant Client 19.23 instalado na
+imagem. `ORACLE_CLIENT_LIB_DIR` permite alterar o diretório, cujo padrão é
+`/opt/oracle/instantclient_19_23`. Esse modo é necessário para o verifier de
+senha legado utilizado pelo ambiente hospitalar.
+
 ## Testes
 
 Execute a suíte sem emitir notas:
@@ -823,5 +1134,6 @@ astro dev parse
 ```
 
 Os testes cobrem payloads das DAGs, regras de elegibilidade, proteção contra
-reemissão, leitura da planilha, ações JSF, consulta por número e filtros da
-extração.
+reemissão, leitura da planilha, ações JSF, consulta por número, filtros da
+extração e normalização do demonstrativo IPM, incrementalidade do SPU,
+tabelas multipágina e campos de EMPENHO/NFS-e.

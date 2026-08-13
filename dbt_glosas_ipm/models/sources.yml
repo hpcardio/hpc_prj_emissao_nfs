@@ -1,0 +1,14 @@
+version: 2
+
+sources:
+  - name: prontocardio
+    schema: api_prontocardio
+    tables:
+      - name: demonstrativo_processos_ipm
+        description: Associação mensal entre demonstrativo, protocolo e processo IPM.
+
+  - name: oracle_stage
+    schema: api_prontocardio_staging
+    tables:
+      - name: ipm_remessas_oracle
+      - name: ipm_itens_oracle
