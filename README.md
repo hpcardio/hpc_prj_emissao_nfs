@@ -1015,10 +1015,22 @@ reCAPTCHA, se solicitado, e clica em **Entrar**. Quando o portal sair da tela
 de login, a janela é fechada automaticamente e a operação interrompida é
 executada novamente na mesma tarefa.
 
-No Astro local, `docker-compose.override.yml` encaminha `DISPLAY` e o socket
-X11 para o scheduler. Reinicie os containers depois de habilitar esse fluxo.
-As credenciais são usadas apenas para preencher os campos no navegador e não
-são escritas no log, no URL nem em arquivos auxiliares.
+O `docker-compose.override.yml` executa um desktop virtual Xvfb em um sidecar
+separado, protegido por senha VNC, e compartilha somente o socket X11 com o
+scheduler. O noVNC escuta exclusivamente em `127.0.0.1` no servidor: sua porta
+não fica exposta na rede. Para acompanhar a renovação em produção, abra um
+túnel SSH na estação autorizada:
+
+```bash
+ssh -N -L 6080:127.0.0.1:6080 usuario@servidor-airflow
+```
+
+Com o túnel ativo, acesse
+`http://localhost:6080/vnc.html?autoconnect=true&resize=scale` e informe
+`SPU_NOVNC_PASSWORD`. A senha VNC deve ter exatamente oito caracteres, limite
+do protocolo usado pelo x11vnc. As credenciais do SPU são usadas apenas para
+preencher os campos no navegador e não são escritas no log, no URL nem em
+arquivos auxiliares.
 
 O mesmo fluxo pode ser iniciado manualmente para preparar ou validar o perfil:
 
@@ -1034,7 +1046,7 @@ por e-mail. No Docker, o volume nomeado `nfse_data` mantém esse perfil após
 reinícios. Um lock de arquivo impede que a extração headless e a renovação
 visível abram o mesmo perfil simultaneamente.
 
-Em um scheduler sem sessão gráfica, desative a abertura com
+Se o sidecar noVNC for deliberadamente desativado, configure
 `SPU_AUTO_RENEW_SESSION=false` e renove o perfil com o utilitário em uma
 máquina que tenha navegador visível. `SPU_STORAGE_STATE_PATH` continua
 disponível para ambientes que já provisionem um arquivo Playwright
@@ -1055,6 +1067,9 @@ disponível para ambientes que já provisionem um arquivo Playwright
 | `SPU_BROWSER_HEADLESS` | `true` na DAG |
 | `SPU_AUTO_RENEW_SESSION` | `true`; abre a janela de login quando a sessão expira |
 | `SPU_AUTH_TIMEOUT_SECONDS` | `1800`; tempo para o usuário concluir o login |
+| `SPU_NOVNC_PASSWORD` | senha de exatamente 8 caracteres para o desktop virtual |
+| `SPU_NOVNC_PORT` | `6080`; publicada somente em `127.0.0.1` para túnel SSH |
+| `SPU_NOVNC_SCREEN` | resolução e profundidade; padrão `1600x900x24` |
 | `SPU_PAGE_TIMEOUT_SECONDS` | `90` |
 | `SPU_DOWNLOAD_DELAY_SECONDS` | `0.75` segundo entre downloads; respostas 429 usam retentativa exponencial |
 | `SPU_PROCESS_BATCH_SIZE` | `50` processos por carga durante a paginação |
