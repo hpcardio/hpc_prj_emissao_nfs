@@ -314,6 +314,48 @@ def test_tramitando_reports_load_only_new_documents(
     assert loaded_rows == [{"id_registro": "row-1"}]
 
 
+def test_tramitando_process_query_preserves_regex_quantifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executed = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, query, parameters) -> None:
+            executed.append((query, parameters))
+
+        def fetchall(self):
+            return []
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(
+        spu_extraction.psycopg2,
+        "connect",
+        lambda *_args, **_kwargs: FakeConnection(),
+    )
+
+    result = spu_extraction.list_tramitando_processes_for_report(
+        SimpleNamespace(database_url="postgresql://db", postgres_schema="api")
+    )
+
+    assert result == ()
+    assert len(executed) == 1
+
+
 def _process(number: str, status: str) -> SpuProcessSummary:
     return SpuProcessSummary(
         numero_processo=number,

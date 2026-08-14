@@ -855,7 +855,7 @@ def list_tramitando_processes_for_report(
         with connection.cursor() as cursor:
             filters = [
                 "UPPER(BTRIM(status_processo)) = 'TRAMITANDO'",
-                "split_part(numero_processo, '/', 2) ~ '^[0-9]{4}$'",
+                "split_part(numero_processo, '/', 2) ~ '^[0-9]{{4}}$'",
                 "split_part(numero_processo, '/', 2)::integer >= 2025",
             ]
             parameters: list[Any] = []
