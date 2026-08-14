@@ -11,6 +11,7 @@ HISTORY_TABLE_NAME = "processos_historico_ipm"
 COGESTAO_TABLE_NAME = "processos_ipm_saude_cogestao"
 EMPENHO_TABLE_NAME = "processos_empenho_ipm"
 NOTA_FISCAL_TABLE_NAME = "processos_nota_fiscal_ipm"
+TRAMITANDO_REPORT_TABLE_NAME = "processos_relatorios_tramitando_ipm"
 
 
 def spu_resources(
@@ -138,3 +139,34 @@ def _cogestao_columns() -> dict[str, dict[str, Any]]:
             "nullable": True,
         }
     return columns
+
+
+def tramitando_report_resource(
+    rows: Iterable[dict[str, Any]],
+) -> Any:
+    return dlt.resource(
+        list(rows),
+        name=TRAMITANDO_REPORT_TABLE_NAME,
+        primary_key="id_registro",
+        write_disposition="merge",
+        columns={
+            "id_registro": {"data_type": "text", "nullable": False},
+            "numero_processo": {"data_type": "text", "nullable": False},
+            "documento_id": {"data_type": "text", "nullable": False},
+            "documento_nome": {"data_type": "text", "nullable": False},
+            "pagina_pdf": {"data_type": "bigint", "nullable": False},
+            "cd_remessa": {"data_type": "bigint", "nullable": False},
+            "nome_paciente": {"data_type": "text", "nullable": False},
+            "numero_guia": {"data_type": "text", "nullable": True},
+            "numero_conta": {"data_type": "text", "nullable": True},
+            "cd_atendimento": {"data_type": "bigint", "nullable": True},
+            "competencia": {"data_type": "date", "nullable": False},
+            "valor": {
+                "data_type": "decimal",
+                "precision": 18,
+                "scale": 2,
+                "nullable": False,
+            },
+            "extraido_em": {"data_type": "timestamp", "nullable": False},
+        },
+    )

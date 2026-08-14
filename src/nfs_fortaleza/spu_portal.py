@@ -98,6 +98,10 @@ class SpuProcessSummary:
     def finalizado(self) -> bool:
         return _fold(self.status_processo) == "finalizado"
 
+    @property
+    def tramitando(self) -> bool:
+        return _fold(self.status_processo) == "tramitando"
+
 
 @dataclass(frozen=True)
 class SpuDocument:
@@ -416,6 +420,152 @@ class SpuPortalClient:
                 )
             )
         return tuple(downloads)
+
+    def download_tramitando_report_documents(
+        self,
+        process: SpuProcessSummary,
+        *,
+        loaded_document_ids: set[str] | None = None,
+    ) -> tuple[SpuDocument, ...]:
+        """Download new account reports from an in-progress process."""
+        if not process.tramitando or _process_year(process.numero_processo) < 2025:
+            return ()
+        page = self._require_page()
+        card = page.locator("#step-geral-listagem .card").filter(
+            has_text=process.numero_processo
+        ).first
+        if not card.count():
+            raise SpuPortalError(
+                f"Card de {process.numero_processo} nao esta na pagina atual do SPU."
+            )
+        component = card.locator(
+            "[data-react-class='Table/DocumentosProcesso']"
+        ).first
+        if not component.count():
+            toggle = card.locator("a[ng-click*='showDocumentos_']").first
+            if not toggle.count():
+                raise SpuPortalError(
+                    f"Lista de anexos ausente em {process.numero_processo}."
+                )
+            toggle.click()
+            component = card.locator(
+                "[data-react-class='Table/DocumentosProcesso']"
+            ).first
+        component.wait_for(
+            state="attached",
+            timeout=self.settings.page_timeout_seconds * 1000,
+        )
+        document_rows = component.locator("tbody tr[data-row-key]")
+        try:
+            document_rows.first.wait_for(
+                state="attached",
+                timeout=self.settings.page_timeout_seconds * 1000,
+            )
+        except PlaywrightTimeoutError:
+            return ()
+        rows = document_rows.evaluate_all(
+            r"""
+            (items) => items.map((row) => {
+              const cells = row.querySelectorAll('td');
+              const link = row.querySelector("a[href*='/documentos/'][href$='/download']");
+              return {
+                id: row.getAttribute('data-row-key') || '',
+                nome: (cells[0]?.innerText || '').trim(),
+                href: link?.href || '',
+              };
+            })
+            """
+        )
+        already_loaded = loaded_document_ids or set()
+        downloads: list[SpuDocument] = []
+        for document in rows:
+            if not isinstance(document, dict):
+                continue
+            document_id = str(document.get("id") or "").strip()
+            name = str(document.get("nome") or "").strip()
+            href = str(document.get("href") or "").strip()
+            if (
+                not document_id
+                or document_id in already_loaded
+                or not href
+                or not _is_tramitando_report_document(name)
+            ):
+                continue
+            path = self._download_attachment(
+                process,
+                document_id=document_id,
+                name=name,
+                url=href,
+            )
+            downloads.append(
+                SpuDocument(
+                    numero_processo=process.numero_processo,
+                    setor="ARQUIVOS ANEXADOS",
+                    document_id=document_id,
+                    nome=name,
+                    path=path,
+                )
+            )
+        return tuple(downloads)
+
+    def _download_attachment(
+        self,
+        process: SpuProcessSummary,
+        *,
+        document_id: str,
+        name: str,
+        url: str,
+    ) -> Path:
+        self._validate_navigation_url(url)
+        destination = (
+            self.downloads_dir
+            / _safe_name(process.numero_ano)
+            / "ARQUIVOS_ANEXADOS"
+            / f"{_safe_name(Path(name).stem)}_{_safe_name(document_id)}.pdf"
+        )
+        if destination.is_file() and destination.read_bytes()[:4] == b"%PDF":
+            return destination
+        response = None
+        for attempt in range(1, 5):
+            if self.settings.download_delay_seconds:
+                time.sleep(self.settings.download_delay_seconds)
+            response = self._require_context().request.get(
+                url,
+                headers={"Referer": self._require_page().url},
+                timeout=self.settings.page_timeout_seconds * 1000,
+            )
+            if response.ok:
+                break
+            retryable = response.status in {429, 500, 502, 503, 504}
+            if not retryable or attempt == 4:
+                raise SpuPortalError(
+                    f"Falha HTTP {response.status} ao baixar {name!r} "
+                    f"de {process.numero_processo}."
+                )
+            wait_seconds = min(float(2**attempt), 30.0)
+            LOGGER.warning(
+                "SPU anexos: HTTP %s em %s/%r; tentativa %s/4 em %.1fs.",
+                response.status,
+                process.numero_processo,
+                name,
+                attempt + 1,
+                wait_seconds,
+            )
+            time.sleep(wait_seconds)
+        if response is None:
+            raise SpuPortalError(
+                f"Download nao iniciado para {name!r} de {process.numero_processo}."
+            )
+        content = response.body()
+        if not content.startswith(b"%PDF"):
+            raise SpuPortalError(
+                f"Documento {name!r} de {process.numero_processo} nao e PDF."
+            )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(".pdf.part")
+        temporary.write_bytes(content)
+        temporary.replace(destination)
+        return destination
 
     def _start(self) -> None:
         profile_dir = self.settings.browser_profile_dir
@@ -824,6 +974,20 @@ def _is_target_document(sector: str, name: str) -> bool:
         )
         return not any(term in folded for term in excluded)
     return False
+
+
+def _is_tramitando_report_document(name: str) -> bool:
+    return bool(
+        re.fullmatch(
+            r"relatorio_\d+_\d+\.pdf",
+            _fold(Path(name).name),
+        )
+    )
+
+
+def _process_year(numero_processo: str) -> int:
+    match = PROCESS_NUMBER_PATTERN.fullmatch(numero_processo.strip())
+    return int(match.group(2)) if match else 0
 
 
 def _safe_name(value: str) -> str:

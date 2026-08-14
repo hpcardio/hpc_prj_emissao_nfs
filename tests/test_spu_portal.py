@@ -10,6 +10,7 @@ from nfs_fortaleza.spu_portal import (
     SpuProfileInUseError,
     SpuSessionExpiredError,
     _is_target_document,
+    _is_tramitando_report_document,
     canonical_spu_sector,
     parse_process_card,
     spu_profile_lock,
@@ -177,6 +178,14 @@ def test_target_document_filter_skips_dispatches_and_certificates() -> None:
     assert not _is_target_document(
         "ipm/nuexo", "CONSULTA REGULARIDADE DO EMPREGADOR.pdf"
     )
+
+
+def test_tramitando_report_filter_accepts_only_exact_numeric_name() -> None:
+    assert _is_tramitando_report_document("RELATORIO_19218_27877736.pdf")
+    assert _is_tramitando_report_document("RELATÓRIO_19218_27877736.PDF")
+    assert not _is_tramitando_report_document("RELATORIO.pdf")
+    assert not _is_tramitando_report_document("RELATORIO_19218.pdf")
+    assert not _is_tramitando_report_document("RELATORIO_19218_X.pdf")
 
 
 def test_process_list_reports_expired_session_to_orchestrator() -> None:

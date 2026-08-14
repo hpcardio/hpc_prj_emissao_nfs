@@ -134,12 +134,18 @@ def extracao_processos_virtuais_spu():
         return summary.as_dict()
 
     processamento = processar_pdfs(carregar_processos())
+    relatorios_tramitando = TriggerDagRunOperator(
+        task_id="acionar_relatorios_tramitando_spu",
+        trigger_dag_id="extracao_relatorios_tramitando_spu",
+        wait_for_completion=True,
+        poke_interval=30,
+    )
     materializar = TriggerDagRunOperator(
         task_id="acionar_materializacao_glosas_ipm",
         trigger_dag_id="materializacao_glosas_ipm",
         wait_for_completion=False,
     )
-    processamento >> materializar
+    processamento >> relatorios_tramitando >> materializar
 
 
 dag = extracao_processos_virtuais_spu()

@@ -9,6 +9,7 @@ from nfs_fortaleza.spu_pdf import (
     parse_legacy_saude_cogestao_pages,
     parse_nuexo_text,
     parse_saude_cogestao_pages,
+    parse_tramitando_report_pages,
 )
 from nfs_fortaleza.spu_portal import SpuDocument
 
@@ -40,6 +41,71 @@ PROTOCOL_HEADER = [
     "Valor Glosado",
     "Valor Aprovado",
 ]
+
+
+def test_parse_tramitando_report_table_extracts_follow_up_fields() -> None:
+    pages = [(
+        1,
+        [[
+            [
+                "Remessa",
+                "Nome do Paciente",
+                "Guia",
+                "Conta",
+                "Atendimento",
+                "Competência",
+                "Valor",
+            ],
+            [
+                "19218",
+                "MARIA DA SILVA",
+                "778899",
+                "123456",
+                "314159",
+                "05/2026",
+                "R$ 1.234,56",
+            ],
+        ]],
+        "",
+    )]
+
+    rows = parse_tramitando_report_pages(
+        pages,
+        numero_processo="P335842/2026",
+        documento_id="27877736",
+        documento_nome="RELATORIO_19218_27877736.pdf",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["cd_remessa"] == 19218
+    assert rows[0]["nome_paciente"] == "MARIA DA SILVA"
+    assert rows[0]["numero_guia"] == "778899"
+    assert rows[0]["numero_conta"] == "123456"
+    assert rows[0]["cd_atendimento"] == 314159
+    assert rows[0]["competencia"] == date(2026, 5, 1)
+    assert rows[0]["valor"] == Decimal("1234.56")
+
+
+def test_parse_tramitando_report_uses_remessa_from_filename() -> None:
+    text = """
+    NOME DO PACIENTE: JOAO DE SOUZA
+    GUIA: 9001
+    CONTA: 7001
+    ATENDIMENTO: 6001
+    COMPETENCIA: 04/2026
+    VALOR: 98,70
+    """
+
+    rows = parse_tramitando_report_pages(
+        [(1, [], text)],
+        numero_processo="P335842/2026",
+        documento_id="27877736",
+        documento_nome="RELATORIO_19218_27877736.pdf",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["cd_remessa"] == 19218
+    assert rows[0]["valor"] == Decimal("98.70")
 
 
 def test_parse_saude_cogestao_joins_tables_across_pdf_pages() -> None:

@@ -943,6 +943,15 @@ o fim da paginação. Depois, `processar_pdfs` consulta somente os finalizados
 pendentes e acessa a árvore materializada. Somente os documentos de
 `IPM/SAUDECOGESTAO` e `IPM/NUEXO` são baixados.
 
+Ao terminar, a DAG dispara e aguarda a DAG separada
+`extracao_relatorios_tramitando_spu`. Ela reutiliza o mesmo perfil persistido,
+o mesmo pool `nfse_portal` e a sessão recém-validada para localizar apenas
+processos `TRAMITANDO` cujo número seja de 2025 em diante. Neles, baixa somente
+nomes no formato exato `RELATORIO_<remessa>_<id>.pdf` e extrai remessa,
+paciente, guia, conta, atendimento, competência e valor. Documentos já
+carregados são ignorados pelo `documento_id`; anexos novos do mesmo processo
+continuam elegíveis em execuções posteriores.
+
 O log informa cada página consultada, os totais de processos novos e já
 carregados, cada lote enviado ao PostgreSQL e o andamento individual dos
 processos na etapa de PDFs. Um status não reconhecido é armazenado como
@@ -962,6 +971,7 @@ na página seguinte.
 | `processos_ipm_saude_cogestao` | Tabela multipágina dos PDFs `IPM/SAUDECOGESTAO` |
 | `processos_empenho_ipm` | Banco, código da conta, código da agência e conta dos EMPENHOS em `IPM/NUEXO` |
 | `processos_nota_fiscal_ipm` | Número, chave de acesso e prestador das NFS-e em `IPM/NUEXO` |
+| `processos_relatorios_tramitando_ipm` | Contas dos relatórios anexados a processos `TRAMITANDO` desde 2025 |
 
 A antiga tabela mista foi migrada para as duas tabelas específicas e preservada
 como `processos_ipm_nuexo_legacy`; a DAG não realiza novas cargas nela.
@@ -999,7 +1009,7 @@ históricos sem todos os campos são registrados no log sem interromper o lote;
 processos finalizados sem o botão `VISUALIZAR PROCESSO` são concluídos sem
 documentos, pois não há árvore materializada disponível;
 falhas técnicas de navegação ou download mantêm o processo pendente para a
-próxima tentativa. As cinco tabelas usam chaves determinísticas e carga
+próxima tentativa. As tabelas usam chaves determinísticas e carga
 `merge`; a DAG também usa `max_active_runs=1`.
 
 ### Autenticação
