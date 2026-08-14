@@ -14,7 +14,9 @@ with demonstrativos as (
     join {{ ref('int_ipm_processos_remessas') }} r
       on r.numero_processo = d.numero_processo
      and r.competencia_producao = d.competencia_producao
-     and r.valor_protocolo = round(d.valor_protocolo_cogestao::numeric, 2)
+     and r.valor_protocolo
+         = round(d.valor_protocolo_cogestao::numeric, 2)
+     and r.numero_protocolo = upper(btrim(d.numero_protocolo))
     where d.status_associacao like 'ASSOCIADO%'
 ), candidatos as (
     select 1 as prioridade, 'competencia_guia_servico_carteira'::text as criterio,

@@ -9,6 +9,9 @@ from airflow.decorators import dag, task
 from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
+from nfs_fortaleza.glosas_ipm_materialization import (
+    materializar_registros_glosa,
+)
 from nfs_fortaleza.glosas_ipm_stage import carregar_hpc_intermediaria
 
 
@@ -17,6 +20,7 @@ POSTGRES_CONN_ID = os.getenv(
     os.getenv("NFSE_POSTGRES_CONN_ID", "postgres_prontocardio"),
 )
 ORACLE_CONN_ID = os.getenv("IPM_ORACLE_CONN_ID", "oracle_prontocardio")
+ORACLE_POOL = os.getenv("IPM_ORACLE_POOL", "default_pool")
 ORACLE_CLIENT_LIB_DIR = os.getenv(
     "ORACLE_CLIENT_LIB_DIR", "/opt/oracle/instantclient_19_23"
 )
@@ -38,7 +42,7 @@ DBT_PROJECT_DIR = Path(
     tags=["ipm", "glosas", "dbt"],
 )
 def materializacao_glosas_ipm():
-    @task(task_id="carregar_hpc_intermediaria", pool="oracle")
+    @task(task_id="carregar_hpc_intermediaria", pool=ORACLE_POOL)
     def carregar_hpc() -> dict[str, int]:
         try:
             from airflow.providers.oracle.hooks.oracle import OracleHook
@@ -88,7 +92,15 @@ def materializacao_glosas_ipm():
             )
         return resultado.stdout[-8000:]
 
-    executar_dbt(carregar_hpc())
+    @task(task_id="materializar_registros_glosa")
+    def materializar_registros(_: str) -> dict[str, int]:
+        postgres = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID).get_conn()
+        try:
+            return materializar_registros_glosa(postgres)
+        finally:
+            postgres.close()
+
+    materializar_registros(executar_dbt(carregar_hpc()))
 
 
 dag = materializacao_glosas_ipm()
