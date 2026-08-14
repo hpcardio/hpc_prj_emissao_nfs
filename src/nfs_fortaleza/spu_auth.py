@@ -109,7 +109,12 @@ def renew_spu_session(
         "locale": "pt-BR",
         "timezone_id": "America/Fortaleza",
         "no_viewport": True,
-        "args": ["--start-maximized"],
+        "args": [
+            "--start-maximized",
+            "--disable-gpu",
+            "--disable-gpu-compositing",
+            "--use-gl=swiftshader",
+        ],
         "ignore_default_args": ["--enable-automation"],
     }
     executable = (

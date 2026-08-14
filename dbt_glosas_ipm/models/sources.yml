@@ -6,6 +6,8 @@ sources:
     tables:
       - name: demonstrativo_processos_ipm
         description: Associação mensal entre demonstrativo, protocolo e processo IPM.
+      - name: associacoes_remessas_ipm_manuais
+        description: Exceções manuais entre processo/NR do IPM e remessa Oracle.
 
   - name: oracle_stage
     schema: api_prontocardio_staging

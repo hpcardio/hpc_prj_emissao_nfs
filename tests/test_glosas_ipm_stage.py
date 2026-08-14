@@ -1,6 +1,9 @@
 from datetime import date
 
-from nfs_fortaleza.glosas_ipm_stage import carregar_hpc_intermediaria
+from nfs_fortaleza.glosas_ipm_stage import (
+    REMESSAS_SQL,
+    carregar_hpc_intermediaria,
+)
 
 
 class CursorPostgres:
@@ -71,3 +74,12 @@ def test_cria_tabela_de_itens_antes_de_alterar_colunas():
     assert indice_create < indice_alter
     assert resultado == {"remessas": 0, "itens": 0}
     assert postgres.commits == 1
+
+
+def test_total_da_remessa_soma_registros_consolidados_por_conta():
+    consulta = " ".join(REMESSAS_SQL.upper().split())
+
+    assert "MAX(VL_TOTAL_CONTA)" not in consulta
+    assert "MAX(VL_TOTAL_REGISTRO) AS VL_TOTAL_REGISTRO" in consulta
+    assert "SUM(VL_TOTAL_REGISTRO) AS VALOR_TOTAL" in consulta
+    assert "GROUP BY CD_REMESSA, CD_REG" in consulta

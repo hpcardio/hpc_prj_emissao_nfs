@@ -8,9 +8,8 @@ from psycopg2.extras import execute_values
 
 
 REMESSAS_SQL = """
-WITH base AS (
-    SELECT cd_remessa, nm_convenio, cnpj_convenio, dt_competencia,
-           MAX(vl_total_conta) AS vl_total_conta,
+WITH contas AS (
+    SELECT cd_remessa, cd_reg, nm_convenio, cnpj_convenio, dt_competencia,
            MAX(vl_total_registro) AS vl_total_registro
       FROM dbamv.hpc_v_conta_atendimento
      WHERE sn_pertence_pacote = 'N'
@@ -18,12 +17,13 @@ WITH base AS (
        AND cd_remessa IS NOT NULL
        AND dt_competencia >= :data_inicial
        AND dt_competencia < :data_final
-     GROUP BY cd_remessa, nm_convenio, cnpj_convenio, dt_competencia
+     GROUP BY cd_remessa, cd_reg, nm_convenio, cnpj_convenio,
+              dt_competencia
 )
 SELECT cd_remessa, nm_convenio, cnpj_convenio,
        TO_CHAR(dt_competencia, 'MM/YYYY') AS competencia,
-       SUM(vl_total_conta) AS valor_total
-  FROM base
+       SUM(vl_total_registro) AS valor_total
+  FROM contas
  GROUP BY cd_remessa, nm_convenio, cnpj_convenio,
           TO_CHAR(dt_competencia, 'MM/YYYY')
 """

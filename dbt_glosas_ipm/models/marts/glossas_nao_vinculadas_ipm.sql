@@ -6,7 +6,9 @@ with associados_remessa as (
     left join {{ ref('int_ipm_processos_remessas') }} r
       on r.numero_processo = d.numero_processo
      and r.competencia_producao = d.competencia_producao
-     and r.valor_protocolo = round(d.valor_protocolo_cogestao::numeric, 2)
+     and r.valor_protocolo
+         = round(d.valor_protocolo_cogestao::numeric, 2)
+     and r.numero_protocolo = upper(btrim(d.numero_protocolo))
 ), primeira_regra_insegura as (
     select id_registro, criterio,
            row_number() over (partition by id_registro order by prioridade) as ordem
