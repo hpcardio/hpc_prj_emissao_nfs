@@ -6,12 +6,25 @@ import pytest
 
 import nfs_fortaleza.spu_pdf as spu_pdf
 from nfs_fortaleza.spu_pdf import (
+    _parse_report_competencia,
     parse_legacy_saude_cogestao_pages,
     parse_nuexo_text,
     parse_saude_cogestao_pages,
     parse_tramitando_report_pages,
 )
 from nfs_fortaleza.spu_portal import SpuDocument
+
+
+@pytest.mark.parametrize(
+    "label",
+    (
+        "Competência: 07/2026",
+        "Competência: 0712026",
+        "Compotênciar 0712026",
+    ),
+)
+def test_parses_report_competence_with_mv_font_variations(label: str) -> None:
+    assert _parse_report_competencia(label) == date(2026, 7, 1)
 
 
 SUMMARY = [
