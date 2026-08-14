@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -16,6 +19,7 @@ from nfs_fortaleza.spu_config import SpuSettings
 from nfs_fortaleza.spu_pdf import (
     parse_nuexo_documents,
     parse_saude_cogestao_documents,
+    parse_tramitando_report_documents,
 )
 from nfs_fortaleza.spu_portal import (
     PROCESS_NUMBER_PATTERN,
@@ -29,7 +33,9 @@ from nfs_fortaleza.spu_portal import (
 )
 from nfs_fortaleza.spu_resources import (
     PROCESS_TABLE_NAME,
+    TRAMITANDO_REPORT_TABLE_NAME,
     spu_resources,
+    tramitando_report_resource,
 )
 
 
@@ -520,6 +526,181 @@ def extract_and_load_spu_pdfs(
     return summary
 
 
+def extract_and_load_tramitando_reports(
+    settings: SpuSettings,
+    process_numbers: tuple[str, ...] = (),
+    *,
+    downloads_dir: Path,
+) -> SpuExtractionSummary:
+    """Extract only new RELATORIO_<remessa>_<id>.pdf files since 2025."""
+    processes = list_tramitando_processes_for_report(settings, process_numbers)
+    if not processes:
+        LOGGER.info("SPU relatórios em tramitação: nenhum processo elegível.")
+        return SpuExtractionSummary((), (), (), (), ())
+
+    loaded_ids = list_loaded_tramitando_report_document_ids(settings)
+    pipeline = _spu_pipeline(settings)
+    processed: list[str] = []
+    already_loaded: list[str] = []
+    failures: list[tuple[str, str]] = []
+    downloaded_files: list[Path] = []
+    eligible = {process.numero_processo: process for process in processes}
+    found: set[str] = set()
+    with SpuPortalClient(settings, downloads_dir=downloads_dir) as client:
+        for _page_number, page_processes in client.iter_process_pages():
+            for listed_process in page_processes:
+                process = eligible.get(listed_process.numero_processo)
+                if process is None:
+                    continue
+                found.add(process.numero_processo)
+                index = len(found)
+                LOGGER.info(
+                    "SPU relatórios em tramitação: processando %s (%s/%s).",
+                    process.numero_processo,
+                    index,
+                    len(processes),
+                )
+                try:
+                    documents = client.download_tramitando_report_documents(
+                        process,
+                        loaded_document_ids=loaded_ids,
+                    )
+                    if not documents:
+                        already_loaded.append(process.numero_processo)
+                        continue
+                    rows = parse_tramitando_report_documents(documents)
+                    _enrich_tramitando_report_rows(settings, rows)
+                    pipeline.run(tramitando_report_resource(rows))
+                    processed.append(process.numero_processo)
+                    downloaded_files.extend(
+                        document.path for document in documents
+                    )
+                    loaded_ids.update(
+                        document.document_id for document in documents
+                    )
+                    LOGGER.info(
+                        "SPU relatórios em tramitação: %s carregado com %s "
+                        "documento(s) e %s registro(s).",
+                        process.numero_processo,
+                        len(documents),
+                        len(rows),
+                    )
+                except SpuSessionExpiredError:
+                    raise
+                except Exception as exc:
+                    LOGGER.exception(
+                        "SPU relatórios em tramitação: falha no processo %s.",
+                        process.numero_processo,
+                    )
+                    failures.append((process.numero_processo, str(exc)))
+            if found == set(eligible):
+                break
+
+    missing = set(eligible) - found
+    failures.extend(
+        (number, "Processo nao encontrado nas paginas atuais do SPU.")
+        for number in sorted(missing)
+    )
+
+    summary = SpuExtractionSummary(
+        processos_encontrados=tuple(item.numero_processo for item in processes),
+        processos_ja_carregados=tuple(already_loaded),
+        processos_processados=tuple(processed),
+        processos_com_erro=tuple(number for number, _ in failures),
+        arquivos=tuple(downloaded_files),
+    )
+    if failures:
+        details = "; ".join(f"{number}: {message}" for number, message in failures)
+        if not processed:
+            raise SpuBatchExtractionError(
+                "Todos os relatórios em tramitação falharam: " + details
+            )
+        LOGGER.warning(
+            "%s processo(s) com relatórios em tramitação serão tentados "
+            "novamente: %s",
+            len(failures),
+            details,
+        )
+    return summary
+
+
+def _enrich_tramitando_report_rows(
+    settings: SpuSettings,
+    rows: list[dict[str, Any]],
+) -> None:
+    """Correct identifiers affected by MV PDF cmap using the Oracle stage."""
+    if not rows:
+        return
+    staging_schema = os.getenv(
+        "GLOSAS_IPM_STAGING_SCHEMA", "api_prontocardio_staging"
+    )
+    remessas = sorted({int(row["cd_remessa"]) for row in rows})
+    with psycopg2.connect(settings.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                     WHERE table_schema = %s AND table_name = 'ipm_itens_oracle'
+                )
+                """,
+                (staging_schema,),
+            )
+            if not bool(cursor.fetchone()[0]):
+                LOGGER.warning(
+                    "SPU relatórios em tramitação: tabela %s.ipm_itens_oracle "
+                    "ausente; mantendo identificadores extraídos do PDF.",
+                    staging_schema,
+                )
+                return
+            query = sql.SQL(
+                "SELECT DISTINCT cd_remessa, cd_reg, cd_atendimento, "
+                "nm_paciente, nr_guia, "
+                "date_trunc('month', dt_competencia)::date, vl_total_conta "
+                "FROM {}.ipm_itens_oracle WHERE cd_remessa = ANY(%s)"
+            ).format(sql.Identifier(staging_schema))
+            cursor.execute(query, (remessas,))
+            candidates = cursor.fetchall()
+
+    for row in rows:
+        same_remessa_value = [
+            candidate
+            for candidate in candidates
+            if int(candidate[0]) == int(row["cd_remessa"])
+            and candidate[6] is not None
+            and Decimal(candidate[6]) == Decimal(row["valor"])
+        ]
+        patient_key = _match_key(str(row.get("nome_paciente") or ""))
+        same_patient = [
+            candidate
+            for candidate in same_remessa_value
+            if _match_key(str(candidate[3] or "")) == patient_key
+        ]
+        matches = same_patient or same_remessa_value
+        unique = {
+            tuple(candidate[index] for index in range(1, 7))
+            for candidate in matches
+        }
+        if len(unique) != 1:
+            continue
+        cd_reg, atendimento, paciente, guia, competencia, _valor = unique.pop()
+        row.update(
+            numero_conta=str(cd_reg) if cd_reg is not None else None,
+            cd_atendimento=int(atendimento) if atendimento is not None else None,
+            nome_paciente=str(paciente) if paciente else row["nome_paciente"],
+            numero_guia=str(guia) if guia is not None else None,
+            competencia=competencia or row["competencia"],
+        )
+
+
+def _match_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    without_marks = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    return re.sub(r"\s+", " ", without_marks).strip().upper()
+
+
 def _spu_pipeline(settings: SpuSettings):
     os.environ["DESTINATION__POSTGRES__CREDENTIALS"] = settings.database_url
     return dlt.pipeline(
@@ -652,7 +833,9 @@ def list_spu_processes_for_pdf(
                 SpuProcessSummary(
                     numero_processo=str(number),
                     status_processo=str(status),
-                    tipo_processo_assunto=str(process_type) if process_type else None,
+                    tipo_processo_assunto=(
+                        str(process_type) if process_type else None
+                    ),
                     data_abertura=opened_at,
                     motivo_finalizacao=(
                         _clean_reason(str(reason)) if reason else None
@@ -662,6 +845,70 @@ def list_spu_processes_for_pdf(
                 for number, status, process_type, opened_at, reason, url
                 in cursor.fetchall()
             )
+
+
+def list_tramitando_processes_for_report(
+    settings: SpuSettings,
+    process_numbers: tuple[str, ...] = (),
+) -> tuple[SpuProcessSummary, ...]:
+    with psycopg2.connect(settings.database_url) as connection:
+        with connection.cursor() as cursor:
+            filters = [
+                "UPPER(BTRIM(status_processo)) = 'TRAMITANDO'",
+                "split_part(numero_processo, '/', 2) ~ '^[0-9]{4}$'",
+                "split_part(numero_processo, '/', 2)::integer >= 2025",
+            ]
+            parameters: list[Any] = []
+            if process_numbers:
+                filters.append("numero_processo = ANY(%s)")
+                parameters.append(list(process_numbers))
+            query = sql.SQL(
+                "SELECT numero_processo, status_processo, "
+                "tipo_processo_assunto, data_abertura, motivo_finalizacao, "
+                "url_visualizacao FROM {}.{} WHERE "
+                + " AND ".join(filters)
+                + " ORDER BY data_abertura DESC NULLS LAST, numero_processo"
+            ).format(
+                sql.Identifier(settings.postgres_schema),
+                sql.Identifier(PROCESS_TABLE_NAME),
+            )
+            cursor.execute(query, parameters)
+            return tuple(
+                SpuProcessSummary(
+                    numero_processo=str(number),
+                    status_processo=str(status),
+                    tipo_processo_assunto=str(process_type) if process_type else None,
+                    data_abertura=opened_at,
+                    motivo_finalizacao=_clean_reason(str(reason)) if reason else None,
+                    url_visualizacao=str(url) if url else None,
+                )
+                for number, status, process_type, opened_at, reason, url
+                in cursor.fetchall()
+            )
+
+
+def list_loaded_tramitando_report_document_ids(
+    settings: SpuSettings,
+) -> set[str]:
+    with psycopg2.connect(settings.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                     WHERE table_schema = %s AND table_name = %s
+                )
+                """,
+                (settings.postgres_schema, TRAMITANDO_REPORT_TABLE_NAME),
+            )
+            if not bool(cursor.fetchone()[0]):
+                return set()
+            query = sql.SQL("SELECT DISTINCT documento_id FROM {}.{}").format(
+                sql.Identifier(settings.postgres_schema),
+                sql.Identifier(TRAMITANDO_REPORT_TABLE_NAME),
+            )
+            cursor.execute(query)
+            return {str(row[0]) for row in cursor.fetchall() if row[0]}
 
 
 def select_new_spu_processes(

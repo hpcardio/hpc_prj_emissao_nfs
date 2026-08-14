@@ -110,10 +110,11 @@ def renew_spu_session(
         "timezone_id": "America/Fortaleza",
         "no_viewport": True,
         "args": [
+            "--kiosk",
             "--start-maximized",
-            "--disable-gpu",
-            "--disable-gpu-compositing",
-            "--use-gl=swiftshader",
+            "--window-position=0,0",
+            "--window-size=1600,900",
+            "--no-xshm",
         ],
         "ignore_default_args": ["--enable-automation"],
     }

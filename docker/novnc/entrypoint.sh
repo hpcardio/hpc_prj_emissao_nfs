@@ -18,8 +18,8 @@ xvfb_pid=""
 
 mkdir -p "$runtime_dir/.vnc" /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix
-printf '%s\n%s\ny\n' "$SPU_NOVNC_PASSWORD" "$SPU_NOVNC_PASSWORD" \
-    | HOME="$runtime_dir" x11vnc -storepasswd >/dev/null
+HOME="$runtime_dir" x11vnc -storepasswd \
+    "$SPU_NOVNC_PASSWORD" "$passwd_file" >/dev/null
 unset SPU_NOVNC_PASSWORD
 
 Xvfb "$display" -screen 0 "$screen" -ac -nolisten tcp &

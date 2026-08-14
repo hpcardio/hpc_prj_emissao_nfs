@@ -19,6 +19,300 @@ from nfs_fortaleza.spu_portal import SpuDocument, SpuPortalError
 LOGGER = logging.getLogger(__name__)
 
 
+TRAMITANDO_REPORT_FIELDS = {
+    "cd_remessa": ("remessa",),
+    "nome_paciente": ("nome do paciente", "nome paciente", "paciente"),
+    "numero_guia": ("numero da guia", "numero guia", "guia"),
+    "numero_conta": ("numero da conta", "numero conta", "conta"),
+    "cd_atendimento": ("codigo atendimento", "cod atendimento", "atendimento"),
+    "competencia": ("competencia",),
+    "valor": ("valor",),
+}
+
+
+def parse_tramitando_report_documents(
+    documents: Iterable[SpuDocument],
+) -> list[dict[str, Any]]:
+    """Parse the compact account reports attached to TRAMITANDO processes."""
+    records: list[dict[str, Any]] = []
+    for document in documents:
+        records_from_layout = _parse_tramitando_report_layout(document)
+        if records_from_layout:
+            records.extend(records_from_layout)
+            continue
+        pages = _extract_pdf_pages(document.path)
+        document_rows = parse_tramitando_report_pages(
+            pages,
+            numero_processo=document.numero_processo,
+            documento_id=document.document_id,
+            documento_nome=document.nome,
+        )
+        if not document_rows:
+            raise SpuPortalError(
+                "O relatório de processo em tramitação não contém os campos "
+                f"esperados: {document.nome}."
+            )
+        records.extend(document_rows)
+    return records
+
+
+def _parse_tramitando_report_layout(
+    document: SpuDocument,
+) -> list[dict[str, Any]]:
+    """Read MV's fixed-width report whose embedded font has a broken cmap."""
+    records: list[dict[str, Any]] = []
+    filename_remessa = _report_remessa_from_filename(document.nome)
+    try:
+        with pdfplumber.open(document.path) as pdf:
+            for page_number, page in enumerate(pdf.pages, start=1):
+                words = page.extract_words(x_tolerance=1, y_tolerance=2) or []
+                if not words:
+                    continue
+                text = page.extract_text(x_tolerance=2, y_tolerance=3) or ""
+                competencia = _parse_report_competencia(text)
+                header_top = min(
+                    (
+                        float(word["top"])
+                        for word in words
+                        if 250 <= float(word["x0"]) < 360
+                        and _fold(str(word["text"])).startswith("at")
+                    ),
+                    default=None,
+                )
+                if header_top is None:
+                    continue
+                total_top = min(
+                    (
+                        float(word["top"])
+                        for word in words
+                        if float(word["top"]) > header_top
+                        and _fold(str(word["text"])).startswith("total")
+                    ),
+                    default=page.height,
+                )
+                data_words = [
+                    word
+                    for word in words
+                    if header_top + 5 < float(word["top"]) < total_top
+                ]
+                for row in _cluster_words_by_top(data_words):
+                    paciente = _words_between(row, 295, 442)
+                    valor = _words_between(row, 530, float("inf"))
+                    if not paciente or _parse_decimal(valor) is None:
+                        continue
+                    values = {
+                        "cd_remessa": str(filename_remessa or ""),
+                        "nome_paciente": paciente,
+                        "numero_guia": _words_between(row, 105, 162),
+                        "numero_conta": _words_between(row, 162, 263),
+                        "cd_atendimento": _words_between(row, 263, 299),
+                        "competencia": (
+                            competencia.strftime("%m/%Y") if competencia else ""
+                        ),
+                        "valor": valor,
+                    }
+                    record = _tramitando_report_record(
+                        values,
+                        numero_processo=document.numero_processo,
+                        documento_id=document.document_id,
+                        documento_nome=document.nome,
+                        pagina_pdf=page_number,
+                        filename_remessa=filename_remessa,
+                    )
+                    if record is not None:
+                        records.append(record)
+    except Exception as exc:
+        raise SpuPortalError(f"Falha ao ler o PDF {document.path.name!r}.") from exc
+    return records
+
+
+def _parse_report_competencia(text: str) -> date | None:
+    match = re.search(
+        r"compet.ncia\s*:\s*(0[1-9]|1[0-2]).(\d{4})\b",
+        _fold(text),
+    )
+    return date(int(match.group(2)), int(match.group(1)), 1) if match else None
+
+
+def _cluster_words_by_top(
+    words: list[dict[str, Any]],
+    *,
+    tolerance: float = 5.0,
+) -> list[list[dict[str, Any]]]:
+    rows: list[list[dict[str, Any]]] = []
+    for word in sorted(words, key=lambda item: (float(item["top"]), item["x0"])):
+        if not rows or abs(float(word["top"]) - float(rows[-1][0]["top"])) > tolerance:
+            rows.append([word])
+        else:
+            rows[-1].append(word)
+    return rows
+
+
+def _words_between(
+    words: list[dict[str, Any]],
+    start: float,
+    end: float,
+) -> str:
+    return " ".join(
+        str(word["text"])
+        for word in sorted(words, key=lambda item: float(item["x0"]))
+        if start <= float(word["x0"]) < end
+    ).strip()
+
+
+def parse_tramitando_report_pages(
+    pages: Iterable[tuple[int, list[list[list[str | None]]], str]],
+    *,
+    numero_processo: str,
+    documento_id: str,
+    documento_nome: str,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    filename_remessa = _report_remessa_from_filename(documento_nome)
+    for page_number, tables, text in pages:
+        page_records: list[dict[str, Any]] = []
+        for table in tables:
+            rows = [_normalize_table_row(row) for row in table]
+            rows = [row for row in rows if any(row)]
+            header = _find_tramitando_report_header(rows)
+            if header is None:
+                continue
+            indexes, start = header
+            for row in rows[start:]:
+                if _tramitando_report_header_indexes(row) is not None:
+                    continue
+                values = {
+                    field: row[index] if index < len(row) else ""
+                    for field, index in indexes.items()
+                }
+                record = _tramitando_report_record(
+                    values,
+                    numero_processo=numero_processo,
+                    documento_id=documento_id,
+                    documento_nome=documento_nome,
+                    pagina_pdf=page_number,
+                    filename_remessa=filename_remessa,
+                )
+                if record is not None:
+                    page_records.append(record)
+        if not page_records:
+            values = _tramitando_report_values_from_text(text)
+            record = _tramitando_report_record(
+                values,
+                numero_processo=numero_processo,
+                documento_id=documento_id,
+                documento_nome=documento_nome,
+                pagina_pdf=page_number,
+                filename_remessa=filename_remessa,
+            )
+            if record is not None:
+                page_records.append(record)
+        records.extend(page_records)
+    return records
+
+
+def _find_tramitando_report_header(
+    rows: list[list[str]],
+) -> tuple[dict[str, int], int] | None:
+    for index in range(min(5, len(rows))):
+        for width in (1, 2):
+            combined = [
+                " ".join(
+                    rows[row_index][column]
+                    for row_index in range(index, min(index + width, len(rows)))
+                    if column < len(rows[row_index])
+                )
+                for column in range(max(len(row) for row in rows[index:index + width]))
+            ]
+            indexes = _tramitando_report_header_indexes(combined)
+            if indexes is not None:
+                return indexes, index + width
+    return None
+
+
+def _tramitando_report_header_indexes(
+    row: list[str],
+) -> dict[str, int] | None:
+    indexes: dict[str, int] = {}
+    for index, raw_column in enumerate(row):
+        column = _fold(_compact(raw_column))
+        for field, aliases in TRAMITANDO_REPORT_FIELDS.items():
+            if field not in indexes and any(alias == column for alias in aliases):
+                indexes[field] = index
+    required = set(TRAMITANDO_REPORT_FIELDS)
+    return indexes if required.issubset(indexes) else None
+
+
+def _tramitando_report_values_from_text(text: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    folded_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in folded_lines:
+        folded = _fold(line)
+        for field, aliases in TRAMITANDO_REPORT_FIELDS.items():
+            if field in values:
+                continue
+            for alias in aliases:
+                match = re.match(
+                    rf"^{re.escape(alias)}\s*[:\-]?\s*(.+)$",
+                    folded,
+                )
+                if match:
+                    prefix_length = len(line) - len(match.group(1))
+                    values[field] = line[prefix_length:].strip(" :-–—")
+                    break
+    return values
+
+
+def _tramitando_report_record(
+    values: dict[str, str],
+    *,
+    numero_processo: str,
+    documento_id: str,
+    documento_nome: str,
+    pagina_pdf: int,
+    filename_remessa: int | None,
+) -> dict[str, Any] | None:
+    remessa_digits = _digits(values.get("cd_remessa", ""))
+    cd_remessa = int(remessa_digits) if remessa_digits else filename_remessa
+    paciente = _optional(values.get("nome_paciente"))
+    competencia = _parse_competencia(values.get("competencia", ""))
+    valor = _parse_decimal(values.get("valor", ""))
+    if cd_remessa is None or paciente is None or competencia is None or valor is None:
+        return None
+    atendimento_digits = _digits(values.get("cd_atendimento", ""))
+    record = {
+        "numero_processo": numero_processo,
+        "documento_id": documento_id,
+        "documento_nome": documento_nome,
+        "pagina_pdf": pagina_pdf,
+        "cd_remessa": cd_remessa,
+        "nome_paciente": paciente,
+        "numero_guia": _optional(values.get("numero_guia")),
+        "numero_conta": _optional(values.get("numero_conta")),
+        "cd_atendimento": int(atendimento_digits) if atendimento_digits else None,
+        "competencia": competencia,
+        "valor": valor,
+    }
+    record["id_registro"] = hashlib.sha256(
+        _fingerprint(record).encode("utf-8")
+    ).hexdigest()
+    record["extraido_em"] = datetime.now().astimezone()
+    return record
+
+
+def _report_remessa_from_filename(name: str) -> int | None:
+    match = re.fullmatch(r"relatorio_(\d+)_\d+\.pdf", _fold(Path(name).name))
+    return int(match.group(1)) if match else None
+
+
+def _parse_competencia(value: str) -> date | None:
+    match = re.search(r"\b(0?[1-9]|1[0-2])[/\-](\d{4})\b", value)
+    if match:
+        return date(int(match.group(2)), int(match.group(1)), 1)
+    parsed = _parse_date(value) if _optional(value) else None
+    return parsed.replace(day=1) if parsed else None
+
+
 def parse_saude_cogestao_documents(
     documents: Iterable[SpuDocument],
 ) -> list[dict[str, Any]]:

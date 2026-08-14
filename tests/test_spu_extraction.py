@@ -13,6 +13,7 @@ from nfs_fortaleza.spu_extraction import (
     SpuExtractionPayload,
     _process_row,
     _split_nuexo_rows,
+    extract_and_load_tramitando_reports,
     load_spu_process_batches,
     select_new_spu_processes,
 )
@@ -23,6 +24,7 @@ from nfs_fortaleza.spu_resources import (
     HISTORY_TABLE_NAME,
     NOTA_FISCAL_TABLE_NAME,
     PROCESS_TABLE_NAME,
+    TRAMITANDO_REPORT_TABLE_NAME,
     spu_resources,
 )
 
@@ -33,6 +35,7 @@ def test_spu_postgres_table_names_use_processos_ipm_prefix() -> None:
     assert COGESTAO_TABLE_NAME == "processos_ipm_saude_cogestao"
     assert EMPENHO_TABLE_NAME == "processos_empenho_ipm"
     assert NOTA_FISCAL_TABLE_NAME == "processos_nota_fiscal_ipm"
+    assert TRAMITANDO_REPORT_TABLE_NAME == "processos_relatorios_tramitando_ipm"
 
     resources = spu_resources([], [], [], [], [])
     assert [resource.name for resource in resources] == [
@@ -243,6 +246,72 @@ def test_process_row_can_mark_finalized_pdf_as_pending() -> None:
     )
 
     assert row["detalhes_finalizados_extraidos"] is False
+
+
+def test_tramitando_reports_load_only_new_documents(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    process = _process("P335842/2026", "TRAMITANDO")
+    document = SimpleNamespace(document_id="new-document", path=tmp_path / "x.pdf")
+    loaded_rows = []
+
+    class FakePortalClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def iter_process_pages(self):
+            yield 1, (process,)
+
+        def download_tramitando_report_documents(
+            self,
+            _process: SpuProcessSummary,
+            *,
+            loaded_document_ids: set[str],
+        ):
+            assert loaded_document_ids == {"old-document"}
+            return (document,)
+
+    class FakePipeline:
+        def run(self, resource) -> None:
+            loaded_rows.extend(resource)
+
+    monkeypatch.setattr(
+        spu_extraction,
+        "list_tramitando_processes_for_report",
+        lambda *_args: (process,),
+    )
+    monkeypatch.setattr(
+        spu_extraction,
+        "list_loaded_tramitando_report_document_ids",
+        lambda *_args: {"old-document"},
+    )
+    monkeypatch.setattr(spu_extraction, "SpuPortalClient", FakePortalClient)
+    monkeypatch.setattr(spu_extraction, "_spu_pipeline", lambda *_args: FakePipeline())
+    monkeypatch.setattr(
+        spu_extraction,
+        "parse_tramitando_report_documents",
+        lambda *_args: [{"id_registro": "row-1"}],
+    )
+    monkeypatch.setattr(
+        spu_extraction,
+        "_enrich_tramitando_report_rows",
+        lambda *_args: None,
+    )
+
+    summary = extract_and_load_tramitando_reports(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        downloads_dir=tmp_path,
+    )
+
+    assert summary.processos_processados == ("P335842/2026",)
+    assert loaded_rows == [{"id_registro": "row-1"}]
 
 
 def _process(number: str, status: str) -> SpuProcessSummary:
