@@ -128,7 +128,7 @@ def _parse_tramitando_report_layout(
 
 def _parse_report_competencia(text: str) -> date | None:
     match = re.search(
-        r"compet.ncia\s*:\s*(0[1-9]|1[0-2]).(\d{4})\b",
+        r"comp\S*?\s*:?[r]?\s*(0[1-9]|1[0-2]).(\d{4})\b",
         _fold(text),
     )
     return date(int(match.group(2)), int(match.group(1)), 1) if match else None
