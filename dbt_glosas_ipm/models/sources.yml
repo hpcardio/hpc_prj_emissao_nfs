@@ -8,6 +8,10 @@ sources:
         description: Associação mensal entre demonstrativo, protocolo e processo IPM.
       - name: associacoes_remessas_ipm_manuais
         description: Exceções manuais entre processo/NR do IPM e remessa Oracle.
+      - name: processos_relatorios_ipm
+        description: >-
+          Destino único das contas extraídas dos relatórios anexados aos
+          processos SPU finalizados ou em tramitação desde 2024.
 
   - name: oracle_stage
     schema: api_prontocardio_staging

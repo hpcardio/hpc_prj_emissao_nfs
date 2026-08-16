@@ -5,13 +5,14 @@ from typing import Any
 
 import dlt
 
+from nfs_fortaleza.spu_report_storage import PROCESS_REPORT_TABLE_NAME
+
 
 PROCESS_TABLE_NAME = "processos_ipm"
 HISTORY_TABLE_NAME = "processos_historico_ipm"
 COGESTAO_TABLE_NAME = "processos_ipm_saude_cogestao"
 EMPENHO_TABLE_NAME = "processos_empenho_ipm"
 NOTA_FISCAL_TABLE_NAME = "processos_nota_fiscal_ipm"
-TRAMITANDO_REPORT_TABLE_NAME = "processos_relatorios_tramitando_ipm"
 
 
 def spu_resources(
@@ -141,17 +142,18 @@ def _cogestao_columns() -> dict[str, dict[str, Any]]:
     return columns
 
 
-def tramitando_report_resource(
+def process_report_resource(
     rows: Iterable[dict[str, Any]],
 ) -> Any:
     return dlt.resource(
         list(rows),
-        name=TRAMITANDO_REPORT_TABLE_NAME,
+        name=PROCESS_REPORT_TABLE_NAME,
         primary_key="id_registro",
         write_disposition="merge",
         columns={
             "id_registro": {"data_type": "text", "nullable": False},
             "numero_processo": {"data_type": "text", "nullable": False},
+            "status_processo": {"data_type": "text", "nullable": False},
             "documento_id": {"data_type": "text", "nullable": False},
             "documento_nome": {"data_type": "text", "nullable": False},
             "pagina_pdf": {"data_type": "bigint", "nullable": False},

@@ -16,7 +16,9 @@ with associados_remessa as (
         select id_registro, prioridade, criterio
         from {{ ref('int_ipm_candidatos_sete_regras') }}
         group by id_registro, prioridade, criterio
-        having count(distinct conta) > 1
+        having count(
+            distinct (numero_processo_resolvido, cd_remessa, conta)
+        ) > 1
     ) regras
 ), pendentes as (
     select

@@ -46,7 +46,7 @@ WITH vinculos AS (
            MAX(glosa.data_realizacao) AS data_glosa,
            SUM(COALESCE(glosa.valor_glosa, 0)) AS valor_glosa
       FROM api_prontocardio.glosas_ipm_vinculadas AS glosa
-      JOIN vinculos
+      LEFT JOIN vinculos
         ON vinculos.processo_normalizado
          = UPPER(BTRIM(glosa.numero_processo))
        AND vinculos.cd_remessa = glosa.cd_remessa
@@ -89,13 +89,19 @@ SELECT COALESCE(item.cd_paciente, 0), item.nm_paciente, item.cd_remessa,
        item.dt_alta, item.dt_lancamento, item.cd_gru_pro,
        COALESCE(item.ds_gru_pro, 'Grupo não informado'), item.cd_gru_fat,
        COALESCE(item.ds_gru_fat, 'Grupo não informado'), item.cd_tuss,
-       item.conciliacao_remessa_id, 'conciliacao', 'true', 'true'
+       item.conciliacao_remessa_id,
+       CASE WHEN item.conciliacao_remessa_id IS NULL
+            THEN 'triagem' ELSE 'conciliacao' END,
+       'true', 'true'
   FROM itens AS item
  WHERE NOT EXISTS (
        SELECT 1
          FROM api_prontocardio.registros_glosa AS existente
-        WHERE existente.conciliacao_remessa_id
-              = item.conciliacao_remessa_id
+        WHERE UPPER(BTRIM(existente.processo_controle_fatura_gab))
+              = UPPER(BTRIM(item.numero_processo))
+          AND existente.cd_remessa = item.cd_remessa
+          AND existente.conciliacao_remessa_id IS NOT DISTINCT FROM
+              item.conciliacao_remessa_id
           AND existente.conta = item.conta
           AND existente.cd_lancamento IS NOT DISTINCT FROM item.cd_lancamento
           AND existente.motivo_glosa IS NOT DISTINCT FROM item.codigo_glosa
@@ -123,15 +129,18 @@ WITH vinculos AS (
            glosa.criterio_correspondencia,
            registro.id AS registro_glosa_id
       FROM api_prontocardio.glosas_ipm_vinculadas AS glosa
-      JOIN vinculos
+      LEFT JOIN vinculos
         ON vinculos.processo_normalizado
          = UPPER(BTRIM(glosa.numero_processo))
        AND vinculos.cd_remessa = glosa.cd_remessa
       JOIN LATERAL (
           SELECT item.id
             FROM api_prontocardio.registros_glosa AS item
-           WHERE item.conciliacao_remessa_id
-                 = vinculos.conciliacao_remessa_id
+           WHERE UPPER(BTRIM(item.processo_controle_fatura_gab))
+                 = UPPER(BTRIM(glosa.numero_processo))
+             AND item.cd_remessa = glosa.cd_remessa
+             AND item.conciliacao_remessa_id IS NOT DISTINCT FROM
+                 vinculos.conciliacao_remessa_id
              AND item.conta = glosa.conta
              AND item.cd_lancamento IS NOT DISTINCT FROM glosa.cd_lancamento
              AND item.motivo_glosa IS NOT DISTINCT FROM

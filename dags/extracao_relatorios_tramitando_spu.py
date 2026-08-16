@@ -17,7 +17,7 @@ from nfs_fortaleza.spu_auth import SpuInteractiveAuthError, renew_spu_session
 from nfs_fortaleza.spu_config import SpuSettings, load_spu_settings
 from nfs_fortaleza.spu_extraction import (
     SpuExtractionPayload,
-    extract_and_load_tramitando_reports,
+    extract_and_load_process_reports,
 )
 from nfs_fortaleza.spu_portal import SpuSessionExpiredError
 
@@ -56,8 +56,8 @@ def _execute_with_session_renewal(
 @dag(
     dag_id="extracao_relatorios_tramitando_spu",
     description=(
-        "Extrai RELATORIO_<remessa>_<id>.pdf de processos SPU em tramitação "
-        "desde 2025."
+        "Extrai RELATORIO_<remessa>_<id>.pdf de processos SPU finalizados "
+        "ou em tramitação desde 2024."
     ),
     schedule=None,
     start_date=pendulum.datetime(2026, 1, 1, tz="America/Fortaleza"),
@@ -70,7 +70,15 @@ def _execute_with_session_renewal(
         "retry_delay": timedelta(minutes=15),
         "execution_timeout": timedelta(hours=8),
     },
-    tags=["spu", "tramitando", "pdf", "ipm", "dlt"],
+    tags=[
+        "spu",
+        "processos",
+        "finalizado",
+        "tramitando",
+        "pdf",
+        "ipm",
+        "dlt",
+    ],
 )
 def extracao_relatorios_tramitando_spu():
     @task(task_id="extrair_relatorios", pool="nfse_portal")
@@ -83,10 +91,10 @@ def extracao_relatorios_tramitando_spu():
         settings = load_spu_settings()
         summary = _execute_with_session_renewal(
             settings,
-            lambda: extract_and_load_tramitando_reports(
+            lambda: extract_and_load_process_reports(
                 settings,
                 payload.numero_processos,
-                downloads_dir=DOWNLOADS_DIR / "relatorios_tramitando",
+                downloads_dir=DOWNLOADS_DIR / "relatorios_processos",
             ),
         )
         return summary.as_dict()

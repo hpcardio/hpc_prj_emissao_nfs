@@ -11,9 +11,11 @@ from nfs_fortaleza.spu_extraction import (
     LoadedSpuProcess,
     SpuExtractionConfigurationError,
     SpuExtractionPayload,
+    _competencia_unica_remessa,
+    _complete_competencia_unica_processo,
     _process_row,
     _split_nuexo_rows,
-    extract_and_load_tramitando_reports,
+    extract_and_load_process_reports,
     load_spu_process_batches,
     select_new_spu_processes,
 )
@@ -24,18 +26,41 @@ from nfs_fortaleza.spu_resources import (
     HISTORY_TABLE_NAME,
     NOTA_FISCAL_TABLE_NAME,
     PROCESS_TABLE_NAME,
-    TRAMITANDO_REPORT_TABLE_NAME,
     spu_resources,
 )
+from nfs_fortaleza.spu_report_storage import PROCESS_REPORT_TABLE_NAME
 
 
 def test_spu_postgres_table_names_use_processos_ipm_prefix() -> None:
     assert PROCESS_TABLE_NAME == "processos_ipm"
     assert HISTORY_TABLE_NAME == "processos_historico_ipm"
     assert COGESTAO_TABLE_NAME == "processos_ipm_saude_cogestao"
+
+
+def test_uses_oracle_competence_when_remessa_has_single_month() -> None:
+    candidates = [
+        (19258, 1, 10, "PACIENTE A", "1", date(2026, 7, 1), 10),
+        (19258, 2, 11, "PACIENTE B", "2", date(2026, 7, 1), 20),
+    ]
+
+    assert _competencia_unica_remessa(candidates) == date(2026, 7, 1)
+
+
+def test_completes_missing_competence_from_single_process_month() -> None:
+    rows = [
+        {"competencia": date(2026, 7, 1)},
+        {"competencia": None},
+    ]
+
+    _complete_competencia_unica_processo(rows)
+
+    assert [row["competencia"] for row in rows] == [
+        date(2026, 7, 1),
+        date(2026, 7, 1),
+    ]
     assert EMPENHO_TABLE_NAME == "processos_empenho_ipm"
     assert NOTA_FISCAL_TABLE_NAME == "processos_nota_fiscal_ipm"
-    assert TRAMITANDO_REPORT_TABLE_NAME == "processos_relatorios_tramitando_ipm"
+    assert PROCESS_REPORT_TABLE_NAME == "processos_relatorios_ipm"
 
     resources = spu_resources([], [], [], [], [])
     assert [resource.name for resource in resources] == [
@@ -236,6 +261,62 @@ def test_process_pagination_stops_after_known_pages_unless_full_scan(
     assert summary.processos_processados == expected_processed
 
 
+def test_individual_search_persists_tramitando_status_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    number = "P100001/2024"
+    loaded = {number: LoadedSpuProcess("TRAMITANDO", False)}
+    persisted: list[dict] = []
+    searched: list[str] = []
+
+    class FakePortalClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def search_process(self, process_number: str):
+            searched.append(process_number)
+            return _process(process_number, "FINALIZADO")
+
+        def iter_process_pages(self, *, max_pages: int | None = None):
+            return iter(())
+
+    def capture_pipeline(
+        _pipeline,
+        *,
+        processes,
+        statuses,
+        cogestao_rows,
+    ) -> None:
+        persisted.extend(dict(row) for row in processes)
+
+    monkeypatch.setattr(
+        spu_extraction,
+        "list_loaded_spu_processes",
+        lambda _settings: dict(loaded),
+    )
+    monkeypatch.setattr(spu_extraction, "SpuPortalClient", FakePortalClient)
+    monkeypatch.setattr(spu_extraction, "_spu_pipeline", lambda _settings: object())
+    monkeypatch.setattr(spu_extraction, "_run_spu_pipeline", capture_pipeline)
+
+    summary = load_spu_process_batches(
+        SimpleNamespace(process_batch_size=50),  # type: ignore[arg-type]
+        SpuExtractionPayload(),
+        downloads_dir=Path("."),
+    )
+
+    assert searched == [number]
+    assert summary.processos_processados == (number,)
+    assert summary.finalizados_para_pdf == (number,)
+    assert persisted[0]["status_processo"] == "FINALIZADO"
+    assert persisted[0]["detalhes_finalizados_extraidos"] is False
+
+
 def test_process_row_can_mark_finalized_pdf_as_pending() -> None:
     process = _process("P100006/2026", "FINALIZADO")
 
@@ -269,7 +350,7 @@ def test_tramitando_reports_load_only_new_documents(
         def iter_process_pages(self):
             yield 1, (process,)
 
-        def download_tramitando_report_documents(
+        def download_process_report_documents(
             self,
             _process: SpuProcessSummary,
             *,
@@ -284,12 +365,12 @@ def test_tramitando_reports_load_only_new_documents(
 
     monkeypatch.setattr(
         spu_extraction,
-        "list_tramitando_processes_for_report",
+        "list_processes_for_report",
         lambda *_args: (process,),
     )
     monkeypatch.setattr(
         spu_extraction,
-        "list_loaded_tramitando_report_document_ids",
+        "list_loaded_report_document_ids",
         lambda *_args: {"old-document"},
     )
     monkeypatch.setattr(spu_extraction, "SpuPortalClient", FakePortalClient)
@@ -297,24 +378,32 @@ def test_tramitando_reports_load_only_new_documents(
     monkeypatch.setattr(
         spu_extraction,
         "parse_tramitando_report_documents",
-        lambda *_args: [{"id_registro": "row-1"}],
+        lambda *_args: [
+            {"id_registro": "row-1", "competencia": date(2026, 7, 1)}
+        ],
     )
     monkeypatch.setattr(
         spu_extraction,
-        "_enrich_tramitando_report_rows",
+        "_enrich_process_report_rows",
         lambda *_args: None,
     )
 
-    summary = extract_and_load_tramitando_reports(
+    summary = extract_and_load_process_reports(
         SimpleNamespace(),  # type: ignore[arg-type]
         downloads_dir=tmp_path,
     )
 
     assert summary.processos_processados == ("P335842/2026",)
-    assert loaded_rows == [{"id_registro": "row-1"}]
+    assert loaded_rows == [
+        {
+            "id_registro": "row-1",
+            "competencia": date(2026, 7, 1),
+            "status_processo": "TRAMITANDO",
+        }
+    ]
 
 
-def test_tramitando_process_query_preserves_regex_quantifier(
+def test_report_process_query_includes_both_statuses_since_2024(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     executed = []
@@ -348,12 +437,15 @@ def test_tramitando_process_query_preserves_regex_quantifier(
         lambda *_args, **_kwargs: FakeConnection(),
     )
 
-    result = spu_extraction.list_tramitando_processes_for_report(
+    result = spu_extraction.list_processes_for_report(
         SimpleNamespace(database_url="postgresql://db", postgres_schema="api")
     )
 
     assert result == ()
     assert len(executed) == 1
+    query = str(executed[0][0])
+    assert "IN ('FINALIZADO', 'TRAMITANDO')" in query
+    assert "::integer >= 2024" in query
 
 
 def _process(number: str, status: str) -> SpuProcessSummary:

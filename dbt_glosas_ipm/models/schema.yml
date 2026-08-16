@@ -1,6 +1,41 @@
 version: 2
 
 models:
+  - name: int_ipm_relatorios_contas
+    columns:
+      - name: id_registro
+        tests: [not_null, unique]
+      - name: numero_processo
+        tests: [not_null]
+      - name: cd_remessa
+        tests: [not_null]
+      - name: conta
+        tests: [not_null]
+
+  - name: int_ipm_relatorios_itens
+    columns:
+      - name: id_item_relatorio
+        tests: [not_null, unique]
+      - name: numero_processo
+        tests: [not_null]
+      - name: cd_remessa
+        tests: [not_null]
+      - name: conta
+        tests: [not_null]
+
+  - name: processos_relatorios_itens_ipm
+    columns:
+      - name: id_registro
+        tests: [not_null, unique]
+      - name: numero_processo
+        tests: [not_null]
+      - name: status_processo
+        tests: [not_null]
+      - name: cd_remessa
+        tests: [not_null]
+      - name: conta
+        tests: [not_null]
+
   - name: int_ipm_processos_remessas
     columns:
       - name: numero_processo

@@ -8,8 +8,10 @@ from nfs_fortaleza.spu_portal import (
     SpuMaterializedTreeUnavailable,
     SpuPortalClient,
     SpuProfileInUseError,
+    SpuProcessSummary,
     SpuSessionExpiredError,
     _is_target_document,
+    _is_report_process_eligible,
     _is_tramitando_report_document,
     canonical_spu_sector,
     parse_process_card,
@@ -188,6 +190,32 @@ def test_tramitando_report_filter_accepts_only_exact_numeric_name() -> None:
     assert not _is_tramitando_report_document("RELATORIO_19218_X.pdf")
 
 
+@pytest.mark.parametrize(
+    ("numero", "status", "expected"),
+    [
+        ("P100001/2024", "TRAMITANDO", True),
+        ("P100002/2024", "FINALIZADO", True),
+        ("P100003/2023", "FINALIZADO", False),
+        ("P100004/2026", "CANCELADO", False),
+    ],
+)
+def test_report_process_filter_accepts_both_statuses_since_2024(
+    numero: str,
+    status: str,
+    expected: bool,
+) -> None:
+    process = SpuProcessSummary(
+        numero_processo=numero,
+        status_processo=status,
+        tipo_processo_assunto=None,
+        data_abertura=None,
+        motivo_finalizacao=None,
+        url_visualizacao=None,
+    )
+
+    assert _is_report_process_eligible(process) is expected
+
+
 def test_process_list_reports_expired_session_to_orchestrator() -> None:
     class LoginPage:
         url = ""
@@ -219,3 +247,19 @@ def test_profile_lock_rejects_simultaneous_browser(tmp_path: Path) -> None:
 
     with spu_profile_lock(profile_dir):
         pass
+
+
+def test_profile_lock_removes_stale_chromium_singletons(
+    tmp_path: Path,
+) -> None:
+    profile_dir = tmp_path / "browser_profile"
+    profile_dir.mkdir()
+    singleton_names = ("SingletonCookie", "SingletonLock", "SingletonSocket")
+    for name in singleton_names:
+        (profile_dir / name).symlink_to(f"stale-{name}")
+
+    with spu_profile_lock(profile_dir):
+        assert all(
+            not (profile_dir / name).is_symlink()
+            for name in singleton_names
+        )
