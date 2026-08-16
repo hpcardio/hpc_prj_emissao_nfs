@@ -26,6 +26,7 @@ from nfs_fortaleza.spu_portal import (
     SpuDocument,
     SpuMaterializedTreeUnavailable,
     SpuPortalClient,
+    SpuPortalError,
     SpuProcessSummary,
     SpuSessionExpiredError,
     _clean_reason,
@@ -33,9 +34,12 @@ from nfs_fortaleza.spu_portal import (
 )
 from nfs_fortaleza.spu_resources import (
     PROCESS_TABLE_NAME,
-    TRAMITANDO_REPORT_TABLE_NAME,
+    process_report_resource,
     spu_resources,
-    tramitando_report_resource,
+)
+from nfs_fortaleza.spu_report_storage import (
+    PROCESS_REPORT_TABLE_NAME,
+    ensure_process_report_table,
 )
 
 
@@ -239,81 +243,112 @@ def load_spu_process_batches(
             len(processed),
         )
 
+    def register(process: SpuProcessSummary) -> bool:
+        """Buffer a new process or status transition; return whether it changed."""
+        number = process.numero_processo
+        found.add(number)
+        if number in seen:
+            return False
+        seen.add(number)
+        candidates, already_loaded = select_new_spu_processes(
+            (process,), loaded
+        )
+        if already_loaded:
+            skipped.append(number)
+            return False
+
+        candidate = candidates[0]
+        observed_at = datetime.now(timezone.utc)
+        process_buffer.append(
+            _process_row(
+                candidate,
+                observed_at,
+                detalhes_finalizados_extraidos=False,
+            )
+        )
+        status_buffer.append(_status_row(candidate, observed_at))
+        loaded[number] = LoadedSpuProcess(
+            candidate.status_processo,
+            False,
+        )
+        if candidate.finalizado:
+            finalizados.append(number)
+        if len(process_buffer) >= settings.process_batch_size:
+            flush()
+        return True
+
     try:
         with SpuPortalClient(settings, downloads_dir=downloads_dir) as client:
-            for page_number, page_processes in client.iter_process_pages(
-                max_pages=payload.max_pages
-            ):
-                pages_processed = page_number
-                page_has_candidate = False
-                for process in page_processes:
-                    number = process.numero_processo
-                    found.add(number)
-                    if number in seen or (requested and number not in requested):
-                        continue
-                    seen.add(number)
-
-                    candidates, already_loaded = select_new_spu_processes(
-                        (process,), loaded
-                    )
-                    if already_loaded:
-                        skipped.append(number)
-                        continue
-
-                    candidate = candidates[0]
-                    page_has_candidate = True
-                    observed_at = datetime.now(timezone.utc)
-                    process_buffer.append(
-                        _process_row(
-                            candidate,
-                            observed_at,
-                            detalhes_finalizados_extraidos=False,
-                        )
-                    )
-                    status_buffer.append(_status_row(candidate, observed_at))
-                    loaded[number] = LoadedSpuProcess(
-                        candidate.status_processo,
-                        False,
-                    )
-                    if candidate.finalizado:
-                        finalizados.append(number)
-
-                    if len(process_buffer) >= settings.process_batch_size:
-                        flush()
-
-                LOGGER.info(
-                    "SPU progresso: pagina=%s, encontrados=%s, novos=%s, "
-                    "ja_carregados=%s, pendentes_no_lote=%s.",
-                    page_number,
-                    len(found),
-                    len(processed) + len(process_buffer),
-                    len(skipped),
-                    len(process_buffer),
+            # The paginated incremental listing can stop before reaching an old
+            # process. Query every tracked TRAMITANDO process explicitly so a
+            # status transition is observed regardless of its list position.
+            tracked_numbers = (
+                sorted(requested)
+                if requested
+                else sorted(
+                    number
+                    for number, previous in loaded.items()
+                    if previous.status_processo.strip().upper() == "TRAMITANDO"
+                    and _process_year_at_least(number, 2024)
                 )
-                if requested and requested.issubset(found):
-                    LOGGER.info(
-                        "Todos os %s processo(s) solicitados foram encontrados; "
-                        "encerrando a paginacao.",
-                        len(requested),
+            )
+            for number in tracked_numbers:
+                process = client.search_process(number)
+                if process is None:
+                    LOGGER.warning(
+                        "SPU pesquisa individual: processo %s nao encontrado.",
+                        number,
                     )
-                    break
-                if requested or payload.varredura_completa:
                     continue
-
-                consecutive_known_pages = (
-                    0
-                    if page_has_candidate
-                    else consecutive_known_pages + 1
+                changed = register(process)
+                LOGGER.info(
+                    "SPU pesquisa individual: %s permanece em %s%s.",
+                    number,
+                    process.status_processo,
+                    " (alteracao persistida)" if changed else "",
                 )
-                if consecutive_known_pages >= INCREMENTAL_KNOWN_PAGE_STREAK:
+
+            # A manually requested extraction is completely served by the
+            # individual search and does not need to walk every result page.
+            if requested:
+                flush()
+            else:
+                for page_number, page_processes in client.iter_process_pages(
+                    max_pages=payload.max_pages
+                ):
+                    pages_processed = page_number
+                    page_has_candidate = False
+                    for process in page_processes:
+                        page_has_candidate = (
+                            register(process) or page_has_candidate
+                        )
+
                     LOGGER.info(
-                        "SPU incremental: %s paginas consecutivas contem "
-                        "somente processos ja carregados; encerrando a "
-                        "paginacao na pagina %s.",
-                        consecutive_known_pages,
+                        "SPU progresso: pagina=%s, encontrados=%s, novos=%s, "
+                        "ja_carregados=%s, pendentes_no_lote=%s.",
                         page_number,
+                        len(found),
+                        len(processed) + len(process_buffer),
+                        len(skipped),
+                        len(process_buffer),
                     )
-                    break
+                    if payload.varredura_completa:
+                        continue
+
+                    consecutive_known_pages = (
+                        0
+                        if page_has_candidate
+                        else consecutive_known_pages + 1
+                    )
+                    if consecutive_known_pages >= INCREMENTAL_KNOWN_PAGE_STREAK:
+                        LOGGER.info(
+                            "SPU incremental: %s paginas consecutivas contem "
+                            "somente processos ja carregados; encerrando a "
+                            "paginacao na pagina %s.",
+                            consecutive_known_pages,
+                            page_number,
+                        )
+                        break
     finally:
         if not load_failed:
             flush()
@@ -526,19 +561,19 @@ def extract_and_load_spu_pdfs(
     return summary
 
 
-def extract_and_load_tramitando_reports(
+def extract_and_load_process_reports(
     settings: SpuSettings,
     process_numbers: tuple[str, ...] = (),
     *,
     downloads_dir: Path,
 ) -> SpuExtractionSummary:
-    """Extract only new RELATORIO_<remessa>_<id>.pdf files since 2025."""
-    processes = list_tramitando_processes_for_report(settings, process_numbers)
+    """Extract new account reports from eligible processes since 2024."""
+    processes = list_processes_for_report(settings, process_numbers)
     if not processes:
-        LOGGER.info("SPU relatórios em tramitação: nenhum processo elegível.")
+        LOGGER.info("SPU relatórios de processos: nenhum processo elegível.")
         return SpuExtractionSummary((), (), (), (), ())
 
-    loaded_ids = list_loaded_tramitando_report_document_ids(settings)
+    loaded_ids = list_loaded_report_document_ids(settings)
     pipeline = _spu_pipeline(settings)
     processed: list[str] = []
     already_loaded: list[str] = []
@@ -555,22 +590,61 @@ def extract_and_load_tramitando_reports(
                 found.add(process.numero_processo)
                 index = len(found)
                 LOGGER.info(
-                    "SPU relatórios em tramitação: processando %s (%s/%s).",
+                    "SPU relatórios de processos: processando %s (%s/%s).",
                     process.numero_processo,
                     index,
                     len(processes),
                 )
                 try:
-                    documents = client.download_tramitando_report_documents(
+                    documents = client.download_process_report_documents(
                         process,
                         loaded_document_ids=loaded_ids,
                     )
                     if not documents:
                         already_loaded.append(process.numero_processo)
                         continue
-                    rows = parse_tramitando_report_documents(documents)
-                    _enrich_tramitando_report_rows(settings, rows)
-                    pipeline.run(tramitando_report_resource(rows))
+                    rows: list[dict[str, Any]] = []
+                    documentos_com_erro: list[str] = []
+                    for document in documents:
+                        try:
+                            rows.extend(
+                                parse_tramitando_report_documents([document])
+                            )
+                        except SpuPortalError:
+                            LOGGER.exception(
+                                "SPU relatórios de processos: documento %s "
+                                "não pôde ser interpretado.",
+                                document.nome,
+                            )
+                            documentos_com_erro.append(document.nome)
+                    if not rows:
+                        raise SpuPortalError(
+                            "Nenhum documento do processo contém registros "
+                            "interpretáveis."
+                        )
+                    _enrich_process_report_rows(settings, rows)
+                    _complete_competencia_unica_processo(rows)
+                    linhas_sem_competencia = sum(
+                        row.get("competencia") is None for row in rows
+                    )
+                    rows = [
+                        row for row in rows if row.get("competencia") is not None
+                    ]
+                    if linhas_sem_competencia:
+                        LOGGER.warning(
+                            "SPU relatórios de processos: %s registro(s) "
+                            "sem competência após o enriquecimento foram "
+                            "mantidos pendentes.",
+                            linhas_sem_competencia,
+                        )
+                    if not rows:
+                        raise SpuPortalError(
+                            "Os documentos não produziram registros com "
+                            "competência válida."
+                        )
+                    for row in rows:
+                        row["status_processo"] = process.status_processo.upper()
+                    pipeline.run(process_report_resource(rows))
                     processed.append(process.numero_processo)
                     downloaded_files.extend(
                         document.path for document in documents
@@ -579,17 +653,23 @@ def extract_and_load_tramitando_reports(
                         document.document_id for document in documents
                     )
                     LOGGER.info(
-                        "SPU relatórios em tramitação: %s carregado com %s "
+                        "SPU relatórios de processos: %s carregado com %s "
                         "documento(s) e %s registro(s).",
                         process.numero_processo,
                         len(documents),
                         len(rows),
                     )
+                    if documentos_com_erro:
+                        LOGGER.warning(
+                            "SPU relatórios de processos: %s documento(s) "
+                            "do processo permaneceram pendentes.",
+                            len(documentos_com_erro),
+                        )
                 except SpuSessionExpiredError:
                     raise
                 except Exception as exc:
                     LOGGER.exception(
-                        "SPU relatórios em tramitação: falha no processo %s.",
+                        "SPU relatórios de processos: falha no processo %s.",
                         process.numero_processo,
                     )
                     failures.append((process.numero_processo, str(exc)))
@@ -613,10 +693,10 @@ def extract_and_load_tramitando_reports(
         details = "; ".join(f"{number}: {message}" for number, message in failures)
         if not processed:
             raise SpuBatchExtractionError(
-                "Todos os relatórios em tramitação falharam: " + details
+                "Todos os relatórios de processos falharam: " + details
             )
         LOGGER.warning(
-            "%s processo(s) com relatórios em tramitação serão tentados "
+            "%s processo(s) com relatórios serão tentados "
             "novamente: %s",
             len(failures),
             details,
@@ -624,7 +704,7 @@ def extract_and_load_tramitando_reports(
     return summary
 
 
-def _enrich_tramitando_report_rows(
+def _enrich_process_report_rows(
     settings: SpuSettings,
     rows: list[dict[str, Any]],
 ) -> None:
@@ -648,7 +728,7 @@ def _enrich_tramitando_report_rows(
             )
             if not bool(cursor.fetchone()[0]):
                 LOGGER.warning(
-                    "SPU relatórios em tramitação: tabela %s.ipm_itens_oracle "
+                    "SPU relatórios de processos: tabela %s.ipm_itens_oracle "
                     "ausente; mantendo identificadores extraídos do PDF.",
                     staging_schema,
                 )
@@ -663,11 +743,18 @@ def _enrich_tramitando_report_rows(
             candidates = cursor.fetchall()
 
     for row in rows:
-        same_remessa_value = [
+        same_remessa = [
             candidate
             for candidate in candidates
             if int(candidate[0]) == int(row["cd_remessa"])
-            and candidate[6] is not None
+        ]
+        competencia_remessa = _competencia_unica_remessa(same_remessa)
+        if row.get("competencia") is None and competencia_remessa is not None:
+            row["competencia"] = competencia_remessa
+        same_remessa_value = [
+            candidate
+            for candidate in same_remessa
+            if candidate[6] is not None
             and Decimal(candidate[6]) == Decimal(row["valor"])
         ]
         patient_key = _match_key(str(row.get("nome_paciente") or ""))
@@ -699,6 +786,29 @@ def _match_key(value: str) -> str:
         char for char in normalized if not unicodedata.combining(char)
     )
     return re.sub(r"\s+", " ", without_marks).strip().upper()
+
+
+def _competencia_unica_remessa(candidates: list[tuple[Any, ...]]):
+    competencias = {
+        candidate[5] for candidate in candidates if candidate[5] is not None
+    }
+    return next(iter(competencias)) if len(competencias) == 1 else None
+
+
+def _complete_competencia_unica_processo(
+    rows: list[dict[str, Any]],
+) -> None:
+    competencias = {
+        row["competencia"]
+        for row in rows
+        if row.get("competencia") is not None
+    }
+    if len(competencias) != 1:
+        return
+    competencia = next(iter(competencias))
+    for row in rows:
+        if row.get("competencia") is None:
+            row["competencia"] = competencia
 
 
 def _spu_pipeline(settings: SpuSettings):
@@ -847,16 +957,17 @@ def list_spu_processes_for_pdf(
             )
 
 
-def list_tramitando_processes_for_report(
+def list_processes_for_report(
     settings: SpuSettings,
     process_numbers: tuple[str, ...] = (),
 ) -> tuple[SpuProcessSummary, ...]:
     with psycopg2.connect(settings.database_url) as connection:
         with connection.cursor() as cursor:
             filters = [
-                "UPPER(BTRIM(status_processo)) = 'TRAMITANDO'",
+                "UPPER(BTRIM(status_processo)) "
+                "IN ('FINALIZADO', 'TRAMITANDO')",
                 "split_part(numero_processo, '/', 2) ~ '^[0-9]{{4}}$'",
-                "split_part(numero_processo, '/', 2)::integer >= 2025",
+                "split_part(numero_processo, '/', 2)::integer >= 2024",
             ]
             parameters: list[Any] = []
             if process_numbers:
@@ -887,25 +998,15 @@ def list_tramitando_processes_for_report(
             )
 
 
-def list_loaded_tramitando_report_document_ids(
+def list_loaded_report_document_ids(
     settings: SpuSettings,
 ) -> set[str]:
     with psycopg2.connect(settings.database_url) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables
-                     WHERE table_schema = %s AND table_name = %s
-                )
-                """,
-                (settings.postgres_schema, TRAMITANDO_REPORT_TABLE_NAME),
-            )
-            if not bool(cursor.fetchone()[0]):
-                return set()
+            ensure_process_report_table(cursor, settings.postgres_schema)
             query = sql.SQL("SELECT DISTINCT documento_id FROM {}.{}").format(
                 sql.Identifier(settings.postgres_schema),
-                sql.Identifier(TRAMITANDO_REPORT_TABLE_NAME),
+                sql.Identifier(PROCESS_REPORT_TABLE_NAME),
             )
             cursor.execute(query)
             return {str(row[0]) for row in cursor.fetchall() if row[0]}
@@ -992,3 +1093,8 @@ def _normalize_process_number(value: str) -> str:
             f"Numero de processo invalido: {value!r}. Use PNNNNNN/AAAA."
         )
     return f"{match.group(1).upper()}/{match.group(2)}"
+
+
+def _process_year_at_least(numero_processo: str, minimum: int) -> bool:
+    match = PROCESS_NUMBER_PATTERN.fullmatch(numero_processo.strip())
+    return bool(match and int(match.group(2)) >= minimum)

@@ -32,8 +32,8 @@ DBT_PROJECT_DIR = Path(
 @dag(
     dag_id="materializacao_glosas_ipm",
     description=(
-        "Carrega tabelas intermediárias Oracle e executa o projeto dbt das "
-        "sete regras de glosas IPM."
+        "Carrega a HPC, cruza diretamente os relatórios SPU e usa as sete "
+        "regras legadas apenas como fallback das glosas IPM."
     ),
     schedule=None,
     start_date=pendulum.datetime(2026, 1, 1, tz="America/Fortaleza"),

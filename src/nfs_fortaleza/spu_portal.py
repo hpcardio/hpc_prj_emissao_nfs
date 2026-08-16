@@ -75,10 +75,28 @@ def spu_profile_lock(profile_dir: Path) -> Iterator[None]:
                 f"O perfil Chromium do SPU ja esta em uso: {profile_dir}. "
                 "Feche a renovacao manual ou aguarde a DAG em execucao."
             ) from exc
+        _remove_stale_chromium_singletons(profile_dir)
         yield
     finally:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         lock_file.close()
+
+
+def _remove_stale_chromium_singletons(profile_dir: Path) -> None:
+    """Remove Chromium locks left behind after an interrupted container."""
+    removed = []
+    for name in ("SingletonCookie", "SingletonLock", "SingletonSocket"):
+        path = profile_dir / name
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        removed.append(name)
+    if removed:
+        LOGGER.warning(
+            "Perfil Chromium do SPU: locks obsoletos removidos: %s.",
+            ", ".join(removed),
+        )
 
 
 @dataclass(frozen=True)
@@ -227,6 +245,119 @@ class SpuPortalClient:
             for process in processes:
                 found[process.numero_processo] = process
         return tuple(sorted(found.values(), key=lambda item: item.numero_processo))
+
+    def search_process(
+        self,
+        numero_processo: str,
+    ) -> SpuProcessSummary | None:
+        """Use the portal's process-number filter and return its exact card."""
+        page = self._require_page()
+        self._open_process_list(page)
+        self._wait_for_process_list(page)
+        search_input = self._process_search_input(page)
+        search_input.fill(numero_processo)
+
+        submitted = search_input.evaluate(
+            r"""
+            (input) => {
+              const form = input.closest('form');
+              const scope = form || input.parentElement?.parentElement || document;
+              const buttons = Array.from(scope.querySelectorAll(
+                'button, input[type="submit"], a.btn'
+              ));
+              const button = buttons.find((item) => {
+                if (item.disabled) return false;
+                const text = (
+                  item.innerText || item.value || item.title ||
+                  item.getAttribute('aria-label') || ''
+                ).replace(/\s+/g, ' ').trim();
+                return /pesquis|buscar|consultar|filtrar/i.test(text);
+              }) || (form ? form.querySelector(
+                'button[type="submit"], input[type="submit"]'
+              ) : null);
+              if (!button) return false;
+              button.click();
+              return true;
+            }
+            """
+        )
+        if not submitted:
+            search_input.press("Enter")
+
+        try:
+            page.wait_for_function(
+                r"""
+                (number) => {
+                  const compact = (value) => (value || '')
+                    .replace(/\s+/g, ' ').trim().toUpperCase()
+                    .replace('_', '/');
+                  const root = document.querySelector('#step-geral-listagem');
+                  const text = compact(root?.innerText);
+                  return text.includes(compact(number)) ||
+                    /nenhum\s+(processo|registro|resultado)|n[aã]o\s+encontrad/i
+                      .test(text);
+                }
+                """,
+                numero_processo,
+                timeout=self.settings.page_timeout_seconds * 1000,
+            )
+        except PlaywrightTimeoutError as exc:
+            if self._is_login_page(page):
+                raise _session_expired_error() from exc
+            raise SpuPortalError(
+                f"A pesquisa do processo {numero_processo} nao respondeu."
+            ) from exc
+
+        raw_cards = page.locator("#step-geral-listagem").evaluate(
+            PROCESS_CARDS_SCRIPT
+        )
+        expected = numero_processo.upper().replace("_", "/")
+        for raw in raw_cards if isinstance(raw_cards, list) else []:
+            process = parse_process_card(raw)
+            if process.numero_processo.upper() == expected:
+                return process
+        return None
+
+    def _process_search_input(self, page: Page):
+        inputs = page.locator(
+            "input:not([type]), input[type='text'], input[type='search']"
+        )
+        candidates: list[tuple[int, int]] = []
+        for index in range(inputs.count()):
+            item = inputs.nth(index)
+            if not item.is_visible() or item.is_disabled():
+                continue
+            metadata = item.evaluate(
+                r"""
+                (input) => {
+                  const label = input.id
+                    ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`)
+                    : null;
+                  return [
+                    input.id, input.name, input.placeholder,
+                    input.getAttribute('aria-label'), label?.innerText,
+                    input.closest('.form-group')?.innerText,
+                    input.parentElement?.innerText
+                  ].filter(Boolean).join(' ');
+                }
+                """
+            )
+            folded = _fold(str(metadata))
+            score = 0
+            if "processo" in folded:
+                score += 10
+            if "numero" in folded or "n processo" in folded:
+                score += 4
+            if "pesquis" in folded or "busca" in folded:
+                score += 2
+            if score:
+                candidates.append((score, index))
+        if not candidates:
+            raise SpuPortalError(
+                "O campo de pesquisa especifica por processo nao foi encontrado."
+            )
+        _, index = max(candidates)
+        return inputs.nth(index)
 
     def iter_process_pages(
         self,
@@ -421,14 +552,14 @@ class SpuPortalClient:
             )
         return tuple(downloads)
 
-    def download_tramitando_report_documents(
+    def download_process_report_documents(
         self,
         process: SpuProcessSummary,
         *,
         loaded_document_ids: set[str] | None = None,
     ) -> tuple[SpuDocument, ...]:
-        """Download new account reports from an in-progress process."""
-        if not process.tramitando or _process_year(process.numero_processo) < 2025:
+        """Download new account reports from an eligible SPU process."""
+        if not _is_report_process_eligible(process):
             return ()
         page = self._require_page()
         card = page.locator("#step-geral-listagem .card").filter(
@@ -983,6 +1114,12 @@ def _is_tramitando_report_document(name: str) -> bool:
             _fold(Path(name).name),
         )
     )
+
+
+def _is_report_process_eligible(process: SpuProcessSummary) -> bool:
+    return (
+        process.finalizado or process.tramitando
+    ) and _process_year(process.numero_processo) >= 2024
 
 
 def _process_year(numero_processo: str) -> int:

@@ -72,3 +72,16 @@ def test_materializacao_preserva_tratativas_e_e_idempotente():
     assert "EXISTENTE.SN_ATIVO = 'TRUE'" in registros
     assert "ON CONFLICT (ID_REGISTRO) DO UPDATE" in rastreios
     assert "ORDER BY (ITEM.DT_RECURSO IS NULL) DESC" in rastreios
+
+
+def test_materializacao_usa_mesmo_destino_para_ambos_os_status():
+    registros = " ".join(MATERIALIZAR_REGISTROS_SQL.upper().split())
+    rastreios = " ".join(MATERIALIZAR_RASTREIO_SQL.upper().split())
+
+    assert "LEFT JOIN VINCULOS" in registros
+    assert "THEN 'TRIAGEM' ELSE 'CONCILIACAO'" in registros
+    assert "LEFT JOIN VINCULOS" in rastreios
+    assert (
+        "ITEM.CONCILIACAO_REMESSA_ID IS NOT DISTINCT FROM "
+        "VINCULOS.CONCILIACAO_REMESSA_ID"
+    ) in rastreios

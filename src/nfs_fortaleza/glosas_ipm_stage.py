@@ -6,6 +6,8 @@ from typing import Any
 
 from psycopg2.extras import execute_values
 
+from nfs_fortaleza.spu_report_storage import ensure_process_report_table
+
 
 REMESSAS_SQL = """
 WITH contas AS (
@@ -61,11 +63,27 @@ def _mes_seguinte(valor: date) -> date:
     return date(valor.year, valor.month + 1, 1)
 
 
-def _periodo_demonstrativo(destino) -> tuple[date, date] | None:
+def _periodo_fontes_glosas(destino) -> tuple[date, date] | None:
     destino.execute("""
-        SELECT MIN(data_realizacao), MAX(data_realizacao)
-          FROM api_prontocardio.demonstrativo_processos_ipm
-         WHERE COALESCE(valor_glosa, 0) > 0
+        SELECT MIN(data_referencia), MAX(data_referencia)
+          FROM (
+                SELECT data_realizacao AS data_referencia
+                  FROM api_prontocardio.demonstrativo_processos_ipm
+                 WHERE COALESCE(valor_glosa, 0) > 0
+                   AND data_realizacao >= DATE '2024-01-01'
+                   AND data_realizacao <
+                       date_trunc('month', CURRENT_DATE) + INTERVAL '2 months'
+                UNION ALL
+                SELECT competencia AS data_referencia
+                  FROM api_prontocardio.processos_relatorios_ipm
+                 WHERE split_part(numero_processo, '/', 2)
+                       ~ '^[0-9]{4}$'
+                   AND split_part(numero_processo, '/', 2)::integer >= 2024
+                   AND status_processo IN ('FINALIZADO', 'TRAMITANDO')
+                   AND competencia >= DATE '2024-01-01'
+                   AND competencia <
+                       date_trunc('month', CURRENT_DATE) + INTERVAL '2 months'
+          ) AS fontes
     """)
     data_inicial, data_final = destino.fetchone()
     if data_inicial is None or data_final is None:
@@ -81,8 +99,10 @@ def _periodo_demonstrativo(destino) -> tuple[date, date] | None:
 
 def carregar_hpc_intermediaria(oracle, postgres) -> dict[str, int]:
     with postgres.cursor() as destino:
-        periodo = _periodo_demonstrativo(destino)
+        ensure_process_report_table(destino, "api_prontocardio")
+        periodo = _periodo_fontes_glosas(destino)
         if periodo is None:
+            postgres.commit()
             return {"remessas": 0, "itens": 0}
         data_inicial, data_final = periodo
         destino.execute("CREATE SCHEMA IF NOT EXISTS api_prontocardio_staging")

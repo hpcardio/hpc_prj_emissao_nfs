@@ -945,12 +945,28 @@ pendentes e acessa a árvore materializada. Somente os documentos de
 
 Ao terminar, a DAG dispara e aguarda a DAG separada
 `extracao_relatorios_tramitando_spu`. Ela reutiliza o mesmo perfil persistido,
-o mesmo pool `nfse_portal` e a sessão recém-validada para localizar apenas
-processos `TRAMITANDO` cujo número seja de 2025 em diante. Neles, baixa somente
-nomes no formato exato `RELATORIO_<remessa>_<id>.pdf` e extrai remessa,
-paciente, guia, conta, atendimento, competência e valor. Documentos já
-carregados são ignorados pelo `documento_id`; anexos novos do mesmo processo
-continuam elegíveis em execuções posteriores.
+o mesmo pool `nfse_portal` e a sessão recém-validada para localizar processos
+`FINALIZADO` ou `TRAMITANDO` cujo número seja de 2024 em diante. Neles, baixa
+somente nomes no formato exato `RELATORIO_<remessa>_<id>.pdf` e extrai remessa,
+paciente, guia, conta, atendimento, competência e valor. O identificador da
+DAG foi preservado por compatibilidade operacional. Documentos já carregados
+são ignorados pelo `documento_id`; anexos novos do mesmo processo continuam
+elegíveis em execuções posteriores.
+
+Os dados do relatório são validados contra `HPC_V_CONTA_ATENDIMENTO` na ordem
+remessa/conta/atendimento, remessa/conta/guia, remessa/atendimento/guia e
+remessa/conta. Uma conta resolvida fornece diretamente o processo, a remessa e
+todos os seus itens hospitalares. Em seguida, guia, conta e serviço associam os
+campos do demonstrativo TRUE aos itens da HPC. As sete regras anteriores ficam
+restritas ao fallback de demonstrativos que não possuem relatório SPU válido;
+vínculos ambíguos continuam pendentes em vez de serem atribuídos por
+aproximação.
+
+O mart `processos_relatorios_itens_ipm` disponibiliza, no mesmo registro, os
+dados de processo/relatório, os campos analíticos da HPC e, quando existentes,
+`numero_protocolo`, `codigo_servico`, `codigo_glosa`, `codigo_beneficiario`,
+`referencia`, `valor_protocolo`, `valor_glosa_protocolo`, `valor_processado` e
+`valor_liberado` do demonstrativo TRUE.
 
 O log informa cada página consultada, os totais de processos novos e já
 carregados, cada lote enviado ao PostgreSQL e o andamento individual dos
@@ -971,7 +987,7 @@ na página seguinte.
 | `processos_ipm_saude_cogestao` | Tabela multipágina dos PDFs `IPM/SAUDECOGESTAO` |
 | `processos_empenho_ipm` | Banco, código da conta, código da agência e conta dos EMPENHOS em `IPM/NUEXO` |
 | `processos_nota_fiscal_ipm` | Número, chave de acesso e prestador das NFS-e em `IPM/NUEXO` |
-| `processos_relatorios_tramitando_ipm` | Contas dos relatórios anexados a processos `TRAMITANDO` desde 2025 |
+| `processos_relatorios_ipm` | Destino canônico único das contas extraídas de processos `FINALIZADO` ou `TRAMITANDO` desde 2024 |
 
 A antiga tabela mista foi migrada para as duas tabelas específicas e preservada
 como `processos_ipm_nuexo_legacy`; a DAG não realiza novas cargas nela.

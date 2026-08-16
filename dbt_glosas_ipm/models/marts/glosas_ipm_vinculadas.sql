@@ -1,6 +1,6 @@
 select
     d.id_registro,
-    d.numero_processo,
+    r.numero_processo,
     d.competencia_producao,
     r.cd_remessa,
     r.conta,
@@ -31,6 +31,9 @@ select
     r.cd_gru_pro,
     r.ds_gru_pro,
     d.numero_protocolo,
+    d.referencia,
+    d.valor_protocolo,
+    d.valor_glosa_protocolo,
     d.data_realizacao,
     d.numero_guia_senha,
     d.codigo_servico,

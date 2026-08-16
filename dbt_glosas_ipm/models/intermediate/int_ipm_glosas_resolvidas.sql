@@ -3,8 +3,17 @@ with resumo_regra as (
         id_registro,
         prioridade,
         criterio,
-        count(distinct conta) as quantidade_contas,
-        count(distinct (conta, cd_lancamento)) as quantidade_itens
+        count(
+            distinct (numero_processo_resolvido, cd_remessa, conta)
+        ) as quantidade_contextos,
+        count(
+            distinct (
+                numero_processo_resolvido,
+                cd_remessa,
+                conta,
+                cd_lancamento
+            )
+        ) as quantidade_itens
     from {{ ref('int_ipm_candidatos_sete_regras') }}
     group by id_registro, prioridade, criterio
 ), regras_seguras as (
@@ -12,7 +21,7 @@ with resumo_regra as (
         *,
         row_number() over (partition by id_registro order by prioridade) as ordem_segura
     from resumo_regra
-    where quantidade_contas = 1
+    where quantidade_contextos = 1
 ), regra_escolhida as (
     select * from regras_seguras where ordem_segura = 1
 ), candidatos_escolhidos as (
@@ -20,7 +29,8 @@ with resumo_regra as (
            e.quantidade_itens,
            row_number() over (
                partition by c.id_registro
-               order by c.conta, c.cd_lancamento
+               order by c.numero_processo_resolvido, c.cd_remessa,
+                        c.conta, c.cd_lancamento
            ) as ordem_item
     from {{ ref('int_ipm_candidatos_sete_regras') }} c
     join regra_escolhida e
@@ -29,6 +39,7 @@ with resumo_regra as (
 )
 select
     id_registro,
+    numero_processo_resolvido as numero_processo,
     criterio,
     case when quantidade_itens = 1 then 'item_unico' else 'conta_unica' end
         as status_correspondencia,
