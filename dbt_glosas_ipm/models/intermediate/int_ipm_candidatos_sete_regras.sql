@@ -169,6 +169,11 @@ with demonstrativos_legado as (
         on to_char(i.dt_competencia, 'YYYY-MM') = d.mes_realizacao
        and i.cd_pro_fat_normalizado = d.servico_normalizado
        and i.nr_carteira_normalizada = d.carteira_normalizada
+       and (
+               d.guia_normalizada = ''
+            or i.nr_guia_normalizada = ''
+            or i.nr_guia_normalizada = d.guia_normalizada
+       )
 
     union all
     select 13, 'relatorio_hpc_competencia_tuss_carteira_valor',
@@ -180,6 +185,11 @@ with demonstrativos_legado as (
        and i.cd_tuss_normalizado = d.servico_normalizado
        and i.nr_carteira_normalizada = d.carteira_normalizada
        and i.valor_item = d.valor_normalizado
+       and (
+               d.guia_normalizada = ''
+            or i.nr_guia_normalizada = ''
+            or i.nr_guia_normalizada = d.guia_normalizada
+       )
 
     union all
     select 14, 'relatorio_hpc_lancamento_servico_carteira',
@@ -192,6 +202,11 @@ with demonstrativos_legado as (
                i.cd_tuss_normalizado
            ) = d.servico_normalizado
        and i.nr_carteira_normalizada = d.carteira_normalizada
+       and (
+               d.guia_normalizada = ''
+            or i.nr_guia_normalizada = ''
+            or i.nr_guia_normalizada = d.guia_normalizada
+       )
 
     union all
     select 15, 'relatorio_hpc_competencia_servico_valor',
@@ -205,6 +220,11 @@ with demonstrativos_legado as (
            ) = d.servico_normalizado
        and i.nr_carteira_normalizada = d.carteira_normalizada
        and i.valor_item = d.valor_normalizado
+       and (
+               d.guia_normalizada = ''
+            or i.nr_guia_normalizada = ''
+            or i.nr_guia_normalizada = d.guia_normalizada
+       )
 
     union all
     select 16, 'relatorio_hpc_atendimento_guia_servico_valor',
@@ -229,6 +249,11 @@ with demonstrativos_legado as (
        and i.cd_pro_fat_normalizado = d.servico_normalizado
        and i.nr_carteira_normalizada = d.carteira_normalizada
        and i.valor_item = d.valor_normalizado
+       and (
+               d.guia_normalizada = ''
+            or i.nr_guia_normalizada = ''
+            or i.nr_guia_normalizada = d.guia_normalizada
+       )
 ), resumo_fallback as (
     select
         id_registro,
