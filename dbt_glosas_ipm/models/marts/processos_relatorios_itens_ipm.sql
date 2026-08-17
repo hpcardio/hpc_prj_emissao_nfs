@@ -1,14 +1,3 @@
-with itens_ordenados as (
-    select
-        item.*,
-        row_number() over (
-            partition by item.numero_processo_normalizado,
-                         item.cd_remessa, item.conta
-            order by item.cd_lancamento nulls last,
-                     item.id_item_relatorio
-        ) as ordem_item_conta
-    from {{ ref('int_ipm_relatorios_itens') }} item
-)
 select
     md5(
         concat_ws(
@@ -42,9 +31,15 @@ select
     item.nm_convenio,
     item.tp_atendimento,
     item.nr_guia_normalizada as nr_guia,
-    item.cd_pro_fat_normalizado as cd_pro_fat,
+    coalesce(
+        nullif(glosa.codigo_servico, ''),
+        item.cd_pro_fat_normalizado
+    ) as cd_pro_fat,
     item.cd_tuss_normalizado as cd_tuss,
-    item.descricao,
+    coalesce(
+        nullif(glosa.descricao_servico, ''),
+        item.descricao
+    ) as descricao,
     item.dt_atendimento,
     item.dt_alta,
     item.dt_competencia,
@@ -67,16 +62,10 @@ select
     glosa.valor_glosa,
     glosa.data_realizacao,
     glosa.criterio_correspondencia as criterio_demonstrativo
-from itens_ordenados item
+from {{ ref('int_ipm_relatorios_itens') }} item
 left join {{ ref('glosas_ipm_vinculadas') }} glosa
   on upper(btrim(glosa.numero_processo))
      = item.numero_processo_normalizado
  and glosa.cd_remessa = item.cd_remessa
  and glosa.conta = item.conta
- and (
-     glosa.cd_lancamento = item.cd_lancamento
-     or (
-         glosa.cd_lancamento is null
-         and item.ordem_item_conta = 1
-     )
- )
+ and glosa.cd_lancamento = item.cd_lancamento

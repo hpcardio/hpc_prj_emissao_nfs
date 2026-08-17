@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from nfs_fortaleza.glosas_ipm_materialization import (
@@ -85,3 +87,19 @@ def test_materializacao_usa_mesmo_destino_para_ambos_os_status():
         "ITEM.CONCILIACAO_REMESSA_ID IS NOT DISTINCT FROM "
         "VINCULOS.CONCILIACAO_REMESSA_ID"
     ) in rastreios
+
+
+def test_mart_nao_anexa_glosa_ao_primeiro_lancamento_da_conta():
+    raiz = Path(__file__).parents[1] / "dbt_glosas_ipm" / "models"
+    resolucao = (
+        raiz / "intermediate" / "int_ipm_glosas_resolvidas.sql"
+    ).read_text()
+    mart = (
+        raiz / "marts" / "processos_relatorios_itens_ipm.sql"
+    ).read_text()
+
+    assert "case when quantidade_itens = 1 then cd_lancamento" not in resolucao
+    assert "glosa.cd_lancamento = item.cd_lancamento" in mart
+    assert "item.ordem_item_conta = 1" not in mart
+    assert "nullif(glosa.codigo_servico, '')" in mart
+    assert "nullif(glosa.descricao_servico, '')" in mart
