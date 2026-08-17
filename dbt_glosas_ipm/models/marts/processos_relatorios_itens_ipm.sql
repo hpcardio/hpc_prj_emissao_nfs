@@ -51,6 +51,7 @@ select
     item.cd_gru_pro,
     item.ds_gru_pro,
     glosa.numero_protocolo,
+    glosa.numero_lote,
     glosa.codigo_servico,
     glosa.codigo_glosa,
     glosa.codigo_beneficiario,
