@@ -147,3 +147,30 @@ def test_fallback_nao_associa_beneficiarios_diferentes():
         assert (
             "i.nr_carteira_normalizada = d.carteira_normalizada" in regra
         )
+
+
+def test_fallback_nao_contradiz_guia_quando_ambas_estao_preenchidas():
+    modelo = (
+        Path(__file__).parents[1]
+        / "dbt_glosas_ipm"
+        / "models"
+        / "intermediate"
+        / "int_ipm_candidatos_sete_regras.sql"
+    ).read_text()
+    protecao = (
+        "d.guia_normalizada = ''",
+        "i.nr_guia_normalizada = ''",
+        "i.nr_guia_normalizada = d.guia_normalizada",
+    )
+
+    for prioridade in (12, 13, 14, 15, 17):
+        inicio = f"select {prioridade}, 'relatorio_hpc_"
+        regra = modelo.split(inicio, 1)[1].split("union all", 1)[0]
+        assert all(trecho in regra for trecho in protecao)
+
+    for prioridade in (11, 16):
+        inicio = f"select {prioridade} as prioridade" if prioridade == 11 else (
+            f"select {prioridade}, 'relatorio_hpc_"
+        )
+        regra = modelo.split(inicio, 1)[1].split("union all", 1)[0]
+        assert "i.nr_guia_normalizada = d.guia_normalizada" in regra
