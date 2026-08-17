@@ -45,7 +45,12 @@ select
         as status_correspondencia,
     cd_remessa,
     conta,
-    case when quantidade_itens = 1 then cd_lancamento end as cd_lancamento,
+    -- A conta pode possuir vários lançamentos. Mesmo quando mais de um
+    -- lançamento do mesmo serviço satisfaz a chave do demonstrativo,
+    -- preservamos um candidato do serviço em vez de apagar o lançamento e
+    -- deixar o mart anexar a glosa ao primeiro item (possivelmente de outro
+    -- serviço) da conta.
+    cd_lancamento,
     cd_atendimento,
     cd_paciente,
     nm_paciente,

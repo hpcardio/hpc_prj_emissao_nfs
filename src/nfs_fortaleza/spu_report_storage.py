@@ -159,6 +159,39 @@ def ensure_process_report_table(cursor, schema: str) -> None:
     )
     cursor.execute(
         sql.SQL(
+            r"""
+            WITH identificadores AS (
+                SELECT id_registro,
+                       regexp_split_to_array(
+                           btrim(numero_conta), '\s+'
+                       ) AS partes
+                  FROM {}
+                 WHERE cd_atendimento IS NULL
+                   AND numero_conta ~ '^\s*[0-9]+(?:\s+[0-9]+){{1,2}}\s*$'
+            ), corrigidos AS (
+                SELECT id_registro,
+                       CASE
+                           WHEN cardinality(partes) = 2 THEN partes[1]
+                           WHEN cardinality(partes) = 3 THEN partes[2]
+                       END AS numero_conta,
+                       CASE
+                           WHEN cardinality(partes) = 2 THEN partes[2]::bigint
+                           WHEN cardinality(partes) = 3 THEN partes[3]::bigint
+                       END AS cd_atendimento
+                  FROM identificadores
+            )
+            UPDATE {} AS rel
+               SET numero_conta = corrigidos.numero_conta,
+                   cd_atendimento = corrigidos.cd_atendimento
+              FROM corrigidos
+             WHERE corrigidos.id_registro = rel.id_registro
+               AND corrigidos.numero_conta IS NOT NULL
+               AND corrigidos.cd_atendimento IS NOT NULL
+            """
+        ).format(canonical, canonical)
+    )
+    cursor.execute(
+        sql.SQL(
             "CREATE INDEX IF NOT EXISTS {} ON {} "
             "(status_processo, numero_processo, cd_remessa)"
         ).format(

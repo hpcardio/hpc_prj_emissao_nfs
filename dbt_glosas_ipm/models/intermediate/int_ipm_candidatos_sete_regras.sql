@@ -203,6 +203,7 @@ with demonstrativos_legado as (
                nullif(i.cd_tuss_normalizado, ''),
                i.cd_pro_fat_normalizado
            ) = d.servico_normalizado
+       and i.nr_carteira_normalizada = d.carteira_normalizada
        and i.valor_item = d.valor_normalizado
 
     union all
@@ -216,6 +217,7 @@ with demonstrativos_legado as (
                nullif(i.cd_tuss_normalizado, ''),
                i.cd_pro_fat_normalizado
            ) = d.servico_normalizado
+       and i.nr_carteira_normalizada = d.carteira_normalizada
        and i.valor_item = d.valor_normalizado
 
     union all
@@ -318,6 +320,7 @@ with demonstrativos_legado as (
        and to_char(i.dt_competencia, 'YYYY-MM') = d.mes_realizacao
        and coalesce(nullif(i.cd_tuss_normalizado, ''), i.cd_pro_fat_normalizado)
            = d.servico_normalizado
+       and i.nr_carteira_normalizada = d.carteira_normalizada
        and i.valor_item = d.valor_normalizado
 
     union all
@@ -333,6 +336,7 @@ with demonstrativos_legado as (
        and i.nr_guia_normalizada = d.guia_normalizada
        and coalesce(nullif(i.cd_tuss_normalizado, ''), i.cd_pro_fat_normalizado)
            = d.servico_normalizado
+       and i.nr_carteira_normalizada = d.carteira_normalizada
        and i.valor_item = d.valor_normalizado
 
     union all

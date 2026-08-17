@@ -31,6 +31,7 @@ select
     r.cd_gru_pro,
     r.ds_gru_pro,
     d.numero_protocolo,
+    d.numero_lote,
     d.referencia,
     d.valor_protocolo,
     d.valor_glosa_protocolo,

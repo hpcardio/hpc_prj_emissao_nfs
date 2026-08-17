@@ -1,6 +1,38 @@
 from __future__ import annotations
 
 
+RECONCILIAR_REGISTROS_SQL = """
+WITH rastreados_obsoletos AS (
+    SELECT DISTINCT rastreio.registro_glosa_id
+      FROM api_prontocardio.registros_glosa_demonstrativo_ipm AS rastreio
+      LEFT JOIN api_prontocardio.glosas_ipm_vinculadas AS atual
+        ON atual.id_registro = rastreio.id_registro
+     WHERE atual.id_registro IS NULL
+), rastreados_vigentes AS (
+    SELECT DISTINCT rastreio.registro_glosa_id
+      FROM api_prontocardio.registros_glosa_demonstrativo_ipm AS rastreio
+      JOIN api_prontocardio.glosas_ipm_vinculadas AS atual
+        ON atual.id_registro = rastreio.id_registro
+)
+UPDATE api_prontocardio.registros_glosa AS registro
+   SET sn_ativo = 'false'
+  FROM rastreados_obsoletos AS obsoleto
+ WHERE registro.id = obsoleto.registro_glosa_id
+   AND registro.sn_ativo = 'true'
+   AND registro.origem_registro IN ('triagem', 'conciliacao')
+   AND registro.qtd_recursado IS NULL
+   AND registro.valor_recursado IS NULL
+   AND registro.dt_recurso IS NULL
+   AND registro.dt_pagamento IS NULL
+   AND registro.dt_recebimento IS NULL
+   AND NOT EXISTS (
+       SELECT 1
+         FROM rastreados_vigentes AS vigente
+        WHERE vigente.registro_glosa_id = registro.id
+   )
+"""
+
+
 MATERIALIZAR_REGISTROS_SQL = """
 WITH vinculos AS (
     SELECT DISTINCT ON (
@@ -165,6 +197,8 @@ SET registro_glosa_id = EXCLUDED.registro_glosa_id,
 def materializar_registros_glosa(postgres) -> dict[str, int]:
     try:
         with postgres.cursor() as cursor:
+            cursor.execute(RECONCILIAR_REGISTROS_SQL)
+            desativados = max(cursor.rowcount, 0)
             cursor.execute(MATERIALIZAR_REGISTROS_SQL)
             registros = max(cursor.rowcount, 0)
             cursor.execute(MATERIALIZAR_RASTREIO_SQL)
@@ -173,4 +207,8 @@ def materializar_registros_glosa(postgres) -> dict[str, int]:
     except Exception:
         postgres.rollback()
         raise
-    return {"registros_glosa": registros, "rastreios": rastreios}
+    return {
+        "registros_desativados": desativados,
+        "registros_glosa": registros,
+        "rastreios": rastreios,
+    }

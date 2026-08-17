@@ -272,6 +272,7 @@ def _tramitando_report_record(
     pagina_pdf: int,
     filename_remessa: int | None,
 ) -> dict[str, Any] | None:
+    values = _separate_compacted_report_identifiers(values)
     remessa_digits = _digits(values.get("cd_remessa", ""))
     cd_remessa = int(remessa_digits) if remessa_digits else filename_remessa
     paciente = _optional(values.get("nome_paciente"))
@@ -298,6 +299,25 @@ def _tramitando_report_record(
     ).hexdigest()
     record["extraido_em"] = datetime.now().astimezone()
     return record
+
+
+def _separate_compacted_report_identifiers(
+    values: dict[str, str],
+) -> dict[str, str]:
+    """Split account/attendance when MV groups fixed-width PDF columns."""
+    if _digits(values.get("cd_atendimento", "")):
+        return values
+
+    account_parts = re.findall(r"\d+", values.get("numero_conta", ""))
+    if len(account_parts) == 3:
+        account_parts = account_parts[1:]
+    if len(account_parts) != 2:
+        return values
+
+    separated = dict(values)
+    separated["numero_conta"] = account_parts[0]
+    separated["cd_atendimento"] = account_parts[1]
+    return separated
 
 
 def _report_remessa_from_filename(name: str) -> int | None:

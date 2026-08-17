@@ -9,6 +9,9 @@ set -eu
 
 display="${DISPLAY:-:99}"
 screen="${SPU_NOVNC_SCREEN:-1600x900x24}"
+display_number="${display#:}"
+x11_socket="/tmp/.X11-unix/X${display_number}"
+x11_lock="/tmp/.X${display_number}-lock"
 runtime_dir=/run/spu-novnc
 passwd_file="$runtime_dir/.vnc/passwd"
 websockify_pid=""
@@ -18,6 +21,14 @@ xvfb_pid=""
 
 mkdir -p "$runtime_dir/.vnc" /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix
+
+# O socket fica em um volume compartilhado com o scheduler. Depois que o
+# sidecar é recriado, o volume pode conservar o socket do Xvfb anterior; nesse
+# caso um novo Xvfb aborta com "Server is already active" e o noVNC fica de pé
+# sem servidor VNC. O sidecar é o único dono do display, portanto limpa os
+# artefatos antigos antes de iniciá-lo.
+rm -f "$x11_socket" "$x11_lock"
+
 HOME="$runtime_dir" x11vnc -storepasswd \
     "$SPU_NOVNC_PASSWORD" "$passwd_file" >/dev/null
 unset SPU_NOVNC_PASSWORD
@@ -34,8 +45,13 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 attempt=0
-while [ ! -S "/tmp/.X11-unix/X${display#:}" ]; do
+while [ ! -S "$x11_socket" ]; do
     attempt=$((attempt + 1))
+    if ! kill -0 "$xvfb_pid" 2>/dev/null; then
+        wait "$xvfb_pid" || true
+        echo "Xvfb encerrou antes de disponibilizar o display $display" >&2
+        exit 1
+    fi
     if [ "$attempt" -ge 50 ]; then
         echo "Xvfb nao criou o socket do display $display" >&2
         exit 1
