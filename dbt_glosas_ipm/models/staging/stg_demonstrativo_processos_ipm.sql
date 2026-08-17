@@ -1,0 +1,27 @@
+select
+    id_registro::text as id_registro,
+    referencia,
+    numero_lote,
+    numero_protocolo,
+    valor_protocolo,
+    valor_glosa_protocolo,
+    numero_guia_senha,
+    data_realizacao,
+    descricao_servico,
+    codigo_tabela,
+    codigo_servico,
+    quantidade_executada,
+    valor_processado,
+    valor_liberado,
+    valor_glosa,
+    codigo_glosa,
+    nome_beneficiario,
+    codigo_beneficiario,
+    cogestao_id_registro,
+    numero_processo,
+    competencia_producao,
+    valor_protocolo_cogestao,
+    status_associacao,
+    candidatos_associacao
+from {{ source('prontocardio', 'demonstrativo_processos_ipm') }}
+where coalesce(valor_glosa, 0) > 0
