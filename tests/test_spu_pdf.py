@@ -99,6 +99,56 @@ def test_parse_tramitando_report_table_extracts_follow_up_fields() -> None:
     assert rows[0]["valor"] == Decimal("1234.56")
 
 
+@pytest.mark.parametrize(
+    ("guia", "conta_extraida", "conta", "atendimento"),
+    (
+        ("38365221", "38365221 233616 190677", "233616", 190677),
+        ("3547E695", "35478695 7810 89062", "7810", 89062),
+        ("702954", "742954 24036", "742954", 24036),
+    ),
+)
+def test_parse_tramitando_report_separates_compacted_identifiers(
+    guia: str,
+    conta_extraida: str,
+    conta: str,
+    atendimento: int,
+) -> None:
+    pages = [(
+        1,
+        [[
+            [
+                "Remessa",
+                "Nome do Paciente",
+                "Guia",
+                "Conta",
+                "Atendimento",
+                "Competência",
+                "Valor",
+            ],
+            [
+                "11530",
+                "JOSE MARIA MILITAO DE SOUZA",
+                guia,
+                conta_extraida,
+                "",
+                "02/2025",
+                "70,00",
+            ],
+        ]],
+        "",
+    )]
+
+    rows = parse_tramitando_report_pages(
+        pages,
+        numero_processo="P105975/2025",
+        documento_id="documento",
+        documento_nome="RELATORIO_11530_35536876.pdf",
+    )
+
+    assert rows[0]["numero_conta"] == conta
+    assert rows[0]["cd_atendimento"] == atendimento
+
+
 def test_parse_tramitando_report_uses_remessa_from_filename() -> None:
     text = """
     NOME DO PACIENTE: JOAO DE SOUZA
