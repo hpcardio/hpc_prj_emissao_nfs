@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
@@ -11,6 +12,8 @@ from nfs_fortaleza.portal import (
     InscricaoRow,
     PortalClient,
     PortalOptions,
+    _extract_enabled_next_page_command_id,
+    _extract_xml_row_command_ids,
     _result_page_fingerprint,
     _validate_exported_inscricao,
 )
@@ -94,12 +97,8 @@ class ExportCompetenciaInscricoesTests(unittest.TestCase):
             url="https://example.test/grpfor/pages/nfse/consulta.seam",
             text="Consultar NFS-e",
         )
-        first_page = (
-            '<a id="consultarnfseForm:dataTable:0:j_id374">Nota A</a>'
-        )
-        second_page = (
-            '<a id="consultarnfseForm:dataTable:0:j_id374">Nota B</a>'
-        )
+        first_page = _xml_export_link("Nota A", "j_id374")
+        second_page = _xml_export_link("Nota B", "j_id376")
         query_result = Mock(text=first_page)
         next_result = Mock(text=second_page)
 
@@ -189,6 +188,102 @@ class ResultPageFingerprintTests(unittest.TestCase):
         self.assertNotEqual(first, next_page)
 
 
+class DynamicCommandIdTests(unittest.TestCase):
+    def test_extracts_xml_command_from_jsf_link_instead_of_table_cell(self) -> None:
+        html = """
+        <td id="consultarnfseForm:dataTable:0:j_id374">
+          <a title="Exportar XML" onclick="if(typeof jsfcljs == 'function'){
+            jsfcljs(document.getElementById('consultarnfseForm'),
+            {'consultarnfseForm:dataTable:0:j_id376':
+             'consultarnfseForm:dataTable:0:j_id376'},'');
+          }return false"></a>
+        </td>
+        <a title="Visualizar" onclick="jsfcljs(
+          document.getElementById('consultarnfseForm'),
+          {'consultarnfseForm:dataTable:0:j_id380':
+           'consultarnfseForm:dataTable:0:j_id380'},'');"></a>
+        """
+
+        self.assertEqual(
+            _extract_xml_row_command_ids(html),
+            ["consultarnfseForm:dataTable:0:j_id376"],
+        )
+
+    def test_extracts_current_enabled_datascroller_command(self) -> None:
+        html = """
+        <td class="rich-datascr-button"><a>&raquo;</a></td>
+        <script>
+          new Richfaces.Datascroller('consultarnfseForm:dataTable:j_id378',
+            function(event) {});
+        </script>
+        """
+
+        self.assertEqual(
+            _extract_enabled_next_page_command_id(html),
+            "consultarnfseForm:dataTable:j_id378",
+        )
+
+    def test_ignores_disabled_next_page_command(self) -> None:
+        html = """
+        <td class="rich-datascr-button-dsbld rich-datascr-button">&raquo;</td>
+        <script>
+          new Richfaces.Datascroller('consultarnfseForm:dataTable:j_id378',
+            function(event) {});
+        </script>
+        """
+
+        self.assertIsNone(_extract_enabled_next_page_command_id(html))
+
+
+class ExportFormPayloadTests(unittest.TestCase):
+    def setUp(self) -> None:
+        settings = Settings(
+            portal_url="https://example.test/grpfor/home.seam",
+            cpf_login="00000000000",
+            senha="secret",
+            database_url="postgresql://example.test/db",
+            postgres_schema="test",
+        )
+        self.client = PortalClient(settings)
+
+    def test_period_payload_does_not_submit_unrelated_actions(self) -> None:
+        payload = self.client._form_payload(
+            MonthPeriod(year=2026, month=8),
+            "state",
+        )
+
+        self.assertFalse(
+            any(key.startswith("consultarnfseForm:j_id") for key in payload)
+        )
+
+    def test_number_payload_does_not_submit_unrelated_actions(self) -> None:
+        payload = self.client._number_form_payload("123", "state")
+
+        self.assertFalse(
+            any(key.startswith("consultarnfseForm:j_id") for key in payload)
+        )
+
+    def test_period_payload_uses_fortaleza_query_date(self) -> None:
+        client = PortalClient(
+            self.client.settings,
+            PortalOptions(query_date=date(2026, 8, 8)),
+        )
+
+        payload = client._form_payload(
+            MonthPeriod(year=2026, month=8),
+            "state",
+        )
+
+        self.assertEqual(
+            payload["consultarnfseForm:dataFinalInputDate"],
+            "08/08/2026",
+        )
+        self.assertEqual(
+            payload["consultarnfseForm:dataFinalInputCurrentDate"],
+            "08/2026",
+        )
+
+
 def _xml(cnpj: str) -> str:
     return f"""
     <CompNfse>
@@ -200,6 +295,16 @@ def _xml(cnpj: str) -> str:
         </InfNfse>
       </Nfse>
     </CompNfse>
+    """
+
+
+def _xml_export_link(label: str, component_id: str) -> str:
+    command_id = f"consultarnfseForm:dataTable:0:{component_id}"
+    return f"""
+    <a title="Exportar XML" onclick="if(typeof jsfcljs == 'function'){{
+      jsfcljs(document.getElementById('consultarnfseForm'),
+      {{'{command_id}':'{command_id}'}},'');
+    }}return false">{label}</a>
     """
 
 

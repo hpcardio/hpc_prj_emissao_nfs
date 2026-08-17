@@ -11,6 +11,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree as ET
+from zoneinfo import ZoneInfo
 
 from dlt.sources.helpers.requests import Response, Session
 
@@ -35,6 +36,7 @@ class PortalOptions:
     downloads_dir: Path = DEFAULT_DOWNLOADS_DIR
     artifacts_dir: Path = DEFAULT_ARTIFACTS_DIR
     timeout_ms: int = 45_000
+    query_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -53,12 +55,15 @@ class PortalClient:
     def __init__(self, settings: Settings, options: PortalOptions | None = None) -> None:
         self.settings = settings
         self.options = options or PortalOptions()
+        self.query_date = self.options.query_date or datetime.now(
+            ZoneInfo("America/Fortaleza")
+        ).date()
 
     def export_competencia(self, competencia: QueryPeriod) -> list[Path]:
         self.options.downloads_dir.mkdir(parents=True, exist_ok=True)
         self.options.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        if competencia.first_day > date.today():
+        if competencia.first_day > self.query_date:
             raise PeriodWithoutInvoicesError(
                 f"Competencia {competencia.mm_yyyy} esta no futuro; a data inicial seria maior que hoje."
             )
@@ -293,8 +298,8 @@ class PortalClient:
         page_index = 1
 
         while True:
-            row_indexes = _extract_xml_row_indexes(current_text)
-            if not row_indexes:
+            row_command_ids = _extract_xml_row_command_ids(current_text)
+            if not row_command_ids:
                 break
 
             page_key = _result_page_fingerprint(
@@ -308,7 +313,10 @@ class PortalClient:
                 )
             seen_pages.add(page_key)
 
-            for row_position, row_index in enumerate(row_indexes, start=1):
+            for row_position, row_command_id in enumerate(
+                row_command_ids,
+                start=1,
+            ):
                 prefix = _download_prefix(competencia, inscricao)
                 file_name = (
                     f"{prefix}"
@@ -319,7 +327,7 @@ class PortalClient:
                         session,
                         query_url,
                         current_view_state,
-                        row_index,
+                        row_command_id,
                         file_name,
                         self._form_payload(competencia, current_view_state),
                     )
@@ -408,8 +416,8 @@ class PortalClient:
         current_text = unescape(response.text)
         self._raise_for_portal_messages(current_text)
         current_view_state = _extract_view_state(current_text, default=view_state)
-        row_indexes = _extract_xml_row_indexes(current_text)
-        if not row_indexes:
+        row_command_ids = _extract_xml_row_command_ids(current_text)
+        if not row_command_ids:
             debug = self._save_http_artifact("consulta_numero_sem_xml", current_text)
             raise PeriodWithoutInvoicesError(
                 f"NFS-e {numero_nfse} nao encontrada para o CNPJ {cnpj}. Debug salvo em {debug}"
@@ -417,14 +425,14 @@ class PortalClient:
 
         downloaded: list[Path] = []
         prefix = _nfse_download_prefix(numero_nfse, cnpj, inscricao)
-        for position, row_index in enumerate(row_indexes, start=1):
-            suffix = "" if len(row_indexes) == 1 else f"-n{position:03d}"
+        for position, row_command_id in enumerate(row_command_ids, start=1):
+            suffix = "" if len(row_command_ids) == 1 else f"-n{position:03d}"
             downloaded.append(
                 self._download_xml_with_requests(
                     session,
                     query_url,
                     current_view_state,
-                    row_index,
+                    row_command_id,
                     f"{prefix}{suffix}.xml",
                     self._number_form_payload(numero_nfse, current_view_state),
                 )
@@ -445,7 +453,8 @@ class PortalClient:
         return _extract_view_state(response.text, default=current_view_state)
 
     def _query_payload(self, competencia: QueryPeriod, view_state: str) -> dict[str, str]:
-        end_date = competencia.query_end_day_br()
+        query_end_day = competencia.query_end_day(self.query_date)
+        end_date = query_end_day.strftime("%d/%m/%Y")
         return {
             "AJAXREQUEST": "_viewRoot",
             "consultarnfseForm": "consultarnfseForm",
@@ -453,7 +462,7 @@ class PortalClient:
             "consultarnfseForm:dataInicialInputDate": competencia.first_day_br,
             "consultarnfseForm:dataInicialInputCurrentDate": competencia.start_month_year_br,
             "consultarnfseForm:dataFinalInputDate": end_date,
-            "consultarnfseForm:dataFinalInputCurrentDate": competencia.end_month_year_br,
+            "consultarnfseForm:dataFinalInputCurrentDate": query_end_day.strftime("%m/%Y"),
             "consultarnfseForm:opTomadorPeriodoEmissao": "2",
             "javax.faces.ViewState": view_state,
             "consultarnfseForm:j_id237": "consultarnfseForm:j_id237",
@@ -461,20 +470,16 @@ class PortalClient:
         }
 
     def _form_payload(self, competencia: QueryPeriod, view_state: str) -> dict[str, str]:
-        end_date = competencia.query_end_day_br()
+        query_end_day = competencia.query_end_day(self.query_date)
+        end_date = query_end_day.strftime("%d/%m/%Y")
         return {
             "consultarnfseForm": "consultarnfseForm",
             "consultarnfseForm:opTipoRelatorio": "1",
             "consultarnfseForm:dataInicialInputDate": competencia.first_day_br,
             "consultarnfseForm:dataInicialInputCurrentDate": competencia.start_month_year_br,
             "consultarnfseForm:dataFinalInputDate": end_date,
-            "consultarnfseForm:dataFinalInputCurrentDate": competencia.end_month_year_br,
+            "consultarnfseForm:dataFinalInputCurrentDate": query_end_day.strftime("%m/%Y"),
             "consultarnfseForm:opTomadorPeriodoEmissao": "2",
-            "consultarnfseForm:j_id237": "Consultar",
-            "consultarnfseForm:j_id238": "Limpar",
-            "consultarnfseForm:j_id323": "Exportar XLS do Resultado da Consulta",
-            "consultarnfseForm:j_id324": "Selecionar todas da página atual",
-            "consultarnfseForm:j_id325": "Exportar XML das Notas Selecionadas",
             "javax.faces.ViewState": view_state,
         }
 
@@ -494,11 +499,6 @@ class PortalClient:
             "consultarnfseForm": "consultarnfseForm",
             "consultarnfseForm:opTipoRelatorio": "1",
             "consultarnfseForm:numNfse": numero_nfse,
-            "consultarnfseForm:j_id237": "Consultar",
-            "consultarnfseForm:j_id238": "Limpar",
-            "consultarnfseForm:j_id323": "Exportar XLS do Resultado da Consulta",
-            "consultarnfseForm:j_id324": "Selecionar todas da página atual",
-            "consultarnfseForm:j_id325": "Exportar XML das Notas Selecionadas",
             "javax.faces.ViewState": view_state,
         }
 
@@ -507,13 +507,13 @@ class PortalClient:
         session: Session,
         url: str,
         view_state: str,
-        row_index: str,
+        row_command_id: str,
         fallback_name: str,
         form_payload: dict[str, str],
     ) -> Path:
         payload = dict(form_payload)
         payload["javax.faces.ViewState"] = view_state
-        payload[f"consultarnfseForm:dataTable:{row_index}:j_id374"] = ""
+        payload[row_command_id] = row_command_id
         response = self._request_post(session, url, payload, ajax=False)
         content = response.content
 
@@ -539,15 +539,16 @@ class PortalClient:
         view_state: str,
         current_text: str,
     ) -> Response | None:
-        if not _has_enabled_next_page(current_text):
+        next_page_command_id = _extract_enabled_next_page_command_id(current_text)
+        if next_page_command_id is None:
             return None
 
         payload = self._form_payload(competencia, view_state)
         payload.update(
             {
                 "AJAXREQUEST": "_viewRoot",
-                "ajaxSingle": "consultarnfseForm:dataTable:j_id376",
-                "consultarnfseForm:dataTable:j_id376": "next",
+                "ajaxSingle": next_page_command_id,
+                next_page_command_id: "next",
                 "AJAX:EVENTS_COUNT": "1",
             }
         )
@@ -893,11 +894,28 @@ def _extract_view_state(text: str, default: str | None = None) -> str:
     raise RuntimeError("javax.faces.ViewState nao encontrado na resposta do portal.")
 
 
-def _extract_xml_row_indexes(text: str) -> list[str]:
+def _extract_xml_row_command_ids(text: str) -> list[str]:
     decoded = unescape(text)
-    indexes = set(re.findall(r"consultarnfseForm:dataTable:(\d+):j_id374", decoded))
-    indexes.update(re.findall(r"consultarnfseForm:dataTable:(\d+):j_id372", decoded))
-    return sorted(indexes, key=int)
+    commands: dict[int, str] = {}
+    pattern = re.compile(
+        r"jsfcljs\s*\(\s*document\.getElementById\(['\"]consultarnfseForm['\"]\)\s*,\s*"
+        r"\{\s*['\"](?P<command>consultarnfseForm:dataTable:(?P<row>\d+):j_id\d+)['\"]"
+        r"\s*:\s*['\"](?P=command)['\"]\s*\}",
+        flags=re.I,
+    )
+    anchors = re.findall(r"<a\b[^>]*>", decoded, flags=re.I | re.S)
+    for anchor in anchors:
+        if not re.search(
+            r"\btitle=['\"]Exportar XML['\"]",
+            anchor,
+            flags=re.I,
+        ):
+            continue
+        match = pattern.search(anchor)
+        if match is None:
+            continue
+        commands[int(match.group("row"))] = match.group("command")
+    return [commands[row] for row in sorted(commands)]
 
 
 def _result_page_fingerprint(text: str, view_state: str) -> str:
@@ -907,13 +925,32 @@ def _result_page_fingerprint(text: str, view_state: str) -> str:
     return sha256(decoded.encode("utf-8")).hexdigest()
 
 
-def _has_enabled_next_page(text: str) -> bool:
+def _extract_enabled_next_page_command_id(text: str) -> str | None:
     decoded = unescape(text)
-    if "consultarnfseForm:dataTable:j_id376" not in decoded:
-        return False
-    if re.search(r"rich-datascr-button-dsbld[^>]*>\s*(?:&raquo;|»|>>)", decoded, flags=re.I):
-        return False
-    return bool(re.search(r"(?:&raquo;|»|>>)", decoded))
+    match = re.search(
+        r"new\s+Richfaces\.Datascroller\(\s*['\"]"
+        r"(consultarnfseForm:dataTable:j_id\d+)['\"]",
+        decoded,
+        flags=re.I,
+    )
+    if match is None:
+        return None
+    command_id = match.group(1)
+    table = re.search(
+        rf"<table\b[^>]*\bid=['\"]{re.escape(command_id)}_table['\"][^>]*>.*?</table>",
+        decoded,
+        flags=re.I | re.S,
+    )
+    scroller_html = table.group(0) if table is not None else decoded
+    if re.search(
+        r"rich-datascr-button-dsbld[^>]*>\s*(?:&raquo;|»|>>)",
+        scroller_html,
+        flags=re.I,
+    ):
+        return None
+    if not re.search(r"(?:&raquo;|»|>>)", scroller_html):
+        return None
+    return command_id
 
 
 def _looks_like_html(content: bytes) -> bool:
