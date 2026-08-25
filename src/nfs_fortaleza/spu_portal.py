@@ -324,12 +324,19 @@ class SpuPortalClient:
                   const root = document.querySelector('#step-geral-listagem');
                   const text = compact(root?.innerText);
                   const expected = compact(state.number);
-                  if (text.includes(expected)) return true;
+                  const navigated = location.href !== state.previousUrl;
+                  const matchingCard = Array.from(
+                    root?.querySelectorAll('.card') || []
+                  ).some((card) => {
+                    const header = card.querySelector('[id="step2-list-num"]');
+                    return compact(header?.innerText).includes(expected);
+                  });
+                  if (navigated && matchingCard) return true;
 
                   const missing =
                     /nenhum\s+(processo|registro|resultado)|n[aã]o\s+encontrad/i
                       .test(text);
-                  if (!missing || location.href === state.previousUrl) {
+                  if (!missing || !navigated) {
                     delete window.__spuMissingSearchResult;
                     return false;
                   }

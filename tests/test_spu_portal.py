@@ -358,7 +358,10 @@ def test_process_search_waits_for_stable_missing_result() -> None:
     class Page:
         def wait_for_function(self, script, *, arg, timeout):
             assert "__spuMissingSearchResult" in script
-            assert "location.href === state.previousUrl" in script
+            assert "location.href !== state.previousUrl" in script
+            assert "querySelectorAll('.card')" in script
+            assert "[id=\"step2-list-num\"]" in script
+            assert "navigated && matchingCard" in script
             assert "Date.now() - marker.since" in script
             assert arg == {
                 "number": "P119449/2026",
