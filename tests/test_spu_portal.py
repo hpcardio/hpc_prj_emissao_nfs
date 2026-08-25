@@ -354,6 +354,36 @@ def test_process_search_selects_exact_ant_option() -> None:
     assert expected.clicks == 1
 
 
+def test_process_search_waits_for_stable_missing_result() -> None:
+    class Page:
+        def wait_for_function(self, script, *, arg, timeout):
+            assert "__spuMissingSearchResult" in script
+            assert "location.href === state.previousUrl" in script
+            assert "Date.now() - marker.since" in script
+            assert arg == {
+                "number": "P119449/2026",
+                "previousUrl": (
+                    "https://spuvirtual.sepog.fortaleza.ce.gov.br/"
+                    "processos/usuario"
+                ),
+                "stabilityMs": 5000,
+            }
+            assert timeout == 90000
+
+    client = SpuPortalClient(  # type: ignore[arg-type]
+        SimpleNamespace(page_timeout_seconds=90),
+        downloads_dir=Path("."),
+    )
+
+    client._wait_for_process_search_result(  # type: ignore[arg-type]
+        Page(),
+        "P119449/2026",
+        previous_url=(
+            "https://spuvirtual.sepog.fortaleza.ce.gov.br/processos/usuario"
+        ),
+    )
+
+
 def test_profile_lock_rejects_simultaneous_browser(tmp_path: Path) -> None:
     profile_dir = tmp_path / "browser_profile"
 
