@@ -28,6 +28,12 @@ DOWNLOADS_DIR = Path(
 ARTIFACTS_DIR = Path(
     os.getenv("NFSE_ARTIFACTS_DIR", "/usr/local/airflow/data/artifacts")
 )
+ISS_FORTALEZA_CA_BUNDLE = Path(
+    os.getenv(
+        "NFSE_ISS_CA_BUNDLE",
+        "/usr/local/airflow/certs/iss-fortaleza-ca-bundle.pem",
+    )
+)
 
 
 @dag(
@@ -70,6 +76,7 @@ def extracao_nfse():
                 downloads_dir=DOWNLOADS_DIR,
                 artifacts_dir=ARTIFACTS_DIR,
                 query_date=reference_date,
+                ca_bundle=ISS_FORTALEZA_CA_BUNDLE,
             ),
         )
         return summary.as_dict()
