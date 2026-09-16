@@ -356,7 +356,10 @@ class PortalClient:
 
         if not downloaded:
             debug = self._save_http_artifact("consulta_sem_xml", current_text)
-            raise RuntimeError(f"Nenhum XML foi encontrado no resultado. Debug salvo em {debug}")
+            raise PeriodWithoutInvoicesError(
+                "Nenhuma NFS-e encontrada para o periodo consultado. "
+                f"Debug salvo em {debug}"
+            )
         if len(downloaded) == 1:
             return downloaded[0]
         return self._zip_downloads(downloaded, f"{_download_prefix(competencia, inscricao)}.zip")

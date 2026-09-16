@@ -10,6 +10,7 @@ from nfs_fortaleza.config import Settings
 from nfs_fortaleza.periods import MonthPeriod
 from nfs_fortaleza.portal import (
     InscricaoRow,
+    PeriodWithoutInvoicesError,
     PortalClient,
     PortalOptions,
     _extract_enabled_next_page_command_id,
@@ -146,6 +147,44 @@ class ExportCompetenciaInscricoesTests(unittest.TestCase):
         self.assertEqual(result, Path("resultado.zip"))
         self.assertEqual(download.call_count, 2)
         self.assertEqual(next_page.call_count, 2)
+
+    def test_treats_result_without_xml_as_period_without_invoices(self) -> None:
+        response = Mock(text="<span id='ajax-view-state'></span>")
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = PortalClient(
+                self.settings,
+                PortalOptions(
+                    downloads_dir=Path(directory),
+                    artifacts_dir=Path(directory),
+                ),
+            )
+
+            with (
+                patch.object(
+                    client,
+                    "_open_nfse_query",
+                    return_value=Mock(
+                        url="https://example.test/grpfor/consulta.seam",
+                        text="Consultar NFS-e state",
+                    ),
+                ),
+                patch.object(client, "_ajax_post", return_value="state"),
+                patch.object(client, "_request_post", return_value=response),
+                patch(
+                    "nfs_fortaleza.portal._extract_view_state",
+                    return_value="state",
+                ),
+                self.assertRaises(PeriodWithoutInvoicesError),
+            ):
+                client._export_competencia_with_requests(
+                    Mock(),
+                    MonthPeriod(year=2026, month=9),
+                )
+
+            artifacts = list(Path(directory).glob("consulta_sem_xml_*.html"))
+
+        self.assertEqual(len(artifacts), 1)
 
 
 class PortalSessionTlsTests(unittest.TestCase):
