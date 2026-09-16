@@ -37,6 +37,7 @@ class PortalOptions:
     artifacts_dir: Path = DEFAULT_ARTIFACTS_DIR
     timeout_ms: int = 45_000
     query_date: date | None = None
+    ca_bundle: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -133,17 +134,7 @@ class PortalClient:
         return [self._export_nfse_with_requests(session, cnpj, numero_nfse, selected)]
 
     def _login_dlt_session(self) -> Session:
-        session = Session()
-        session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            }
-        )
+        session = self._new_session()
 
         initial = self._request_get(session, self.settings.portal_url)
         if _looks_authenticated_html(initial.text):
@@ -172,6 +163,28 @@ class PortalClient:
             raise RuntimeError("Login por dlt requests recusado pelo portal. Verifique CPF/senha ou bloqueios do IdP.")
 
         self._open_home_after_login(session, result)
+        return session
+
+    def _new_session(self) -> Session:
+        session = Session()
+        if self.options.ca_bundle is not None:
+            ca_bundle = self.options.ca_bundle.resolve()
+            if not ca_bundle.is_file():
+                raise RuntimeError(
+                    f"Bundle TLS do ISS Fortaleza nao encontrado: {ca_bundle}"
+                )
+            session.verify = str(ca_bundle)
+        session.headers.update(
+            {
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            }
+        )
+
         return session
 
     def _open_home_after_login(self, session: Session, response: Response) -> Response:

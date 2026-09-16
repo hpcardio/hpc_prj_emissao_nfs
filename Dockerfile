@@ -15,9 +15,15 @@ ENV PATH=/opt/oracle/instantclient_19_23:${PATH}
 
 COPY requirements.txt pyproject.toml README.md ./
 COPY src ./src
+COPY certs ./certs
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir --no-deps --editable . \
-    && python -m playwright install --with-deps chromium
+    && python -m playwright install --with-deps chromium \
+    && cp /etc/ssl/certs/ca-certificates.crt /usr/local/airflow/certs/iss-fortaleza-ca-bundle.pem \
+    && cat /usr/local/airflow/certs/letsencrypt-yr1.pem \
+           /usr/local/airflow/certs/letsencrypt-yr2.pem \
+           /usr/local/airflow/certs/letsencrypt-root-yr-by-x1.pem \
+        >> /usr/local/airflow/certs/iss-fortaleza-ca-bundle.pem
 
 COPY dags ./dags
 COPY dbt_glosas_ipm ./dbt_glosas_ipm
