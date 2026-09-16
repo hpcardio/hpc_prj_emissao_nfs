@@ -89,6 +89,7 @@ class ExportCompetenciaInscricoesTests(unittest.TestCase):
             [call(first_export, first), call(second_export, second)]
         )
 
+
     def test_processes_next_page_when_html_row_indexes_repeat(self) -> None:
         row = InscricaoRow("0", "11.111.111/0001-11", "100", "Empresa A")
         client = PortalClient(self.settings)
@@ -145,6 +146,53 @@ class ExportCompetenciaInscricoesTests(unittest.TestCase):
         self.assertEqual(result, Path("resultado.zip"))
         self.assertEqual(download.call_count, 2)
         self.assertEqual(next_page.call_count, 2)
+
+
+class PortalSessionTlsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.settings = Settings(
+            portal_url="https://example.test/grpfor/home.seam",
+            cpf_login="00000000000",
+            senha="secret",
+            database_url="postgresql://example.test/db",
+            postgres_schema="test",
+        )
+
+    def test_configures_custom_ca_bundle_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ca_bundle = Path(directory) / "iss-ca-bundle.pem"
+            ca_bundle.write_text("test bundle", encoding="utf-8")
+            session = Mock()
+
+            with patch("nfs_fortaleza.portal.Session", return_value=session):
+                result = PortalClient(
+                    self.settings,
+                    PortalOptions(ca_bundle=ca_bundle),
+                )._new_session()
+
+        self.assertIs(result, session)
+        self.assertEqual(session.verify, str(ca_bundle.resolve()))
+
+    def test_keeps_default_tls_configuration_without_custom_bundle(self) -> None:
+        session = Mock()
+
+        with patch("nfs_fortaleza.portal.Session", return_value=session):
+            result = PortalClient(self.settings)._new_session()
+
+        self.assertIs(result, session)
+        self.assertNotIn("verify", session.__dict__)
+
+    def test_rejects_missing_custom_ca_bundle(self) -> None:
+        missing = Path("/tmp/missing-iss-ca-bundle.pem")
+
+        with (
+            patch("nfs_fortaleza.portal.Session"),
+            self.assertRaisesRegex(RuntimeError, "Bundle TLS.*nao encontrado"),
+        ):
+            PortalClient(
+                self.settings,
+                PortalOptions(ca_bundle=missing),
+            )._new_session()
 
 
 class ValidateExportedInscricaoTests(unittest.TestCase):
