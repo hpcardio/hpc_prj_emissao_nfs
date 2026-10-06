@@ -10,11 +10,13 @@ from nfs_fortaleza.maida_extraction import (
     MaidaExtractionPayload,
     _competency_range,
     _parse_glosa_records,
+    _enrich_glosa_records,
 )
 from nfs_fortaleza.maida_portal import (
     DownloadedMaidaDocument,
     MaidaCompetency,
     MaidaDocument,
+    MaidaCompetencyResult,
 )
 from nfs_fortaleza.maida_xlsx import MaidaSpreadsheetError
 
@@ -75,3 +77,23 @@ def test_parse_glosa_records_ignores_document_without_glosa_layout(
 
     assert _parse_glosa_records(downloaded) == []
     assert "Demonstrativo_Lote26921.xlsx" in caplog.text
+
+
+def test_enriches_record_with_card_from_same_lot_and_guide(tmp_path: Path) -> None:
+    document = MaidaDocument(
+        competency=MaidaCompetency(2026, 1), source="resumo",
+        document_id="doc-1", file_name="demo.xlsx", remote_path="/demo.xlsx",
+    )
+    downloaded = DownloadedMaidaDocument(document=document, path=tmp_path / "demo.xlsx")
+    result = MaidaCompetencyResult(
+        document.competency, (), (), (),
+        ({
+            "lote_id": "uuid-lote", "identificador_lote": "19414",
+            "numero_guia": "521882", "numero_carteira": "000123456",
+        },),
+    )
+    records = [{"numero_lote": "19414", "numero_guia_senha": "521882"}]
+
+    enriched = _enrich_glosa_records(records, downloaded, result)
+
+    assert enriched[0]["codigo_beneficiario"] == "000123456"

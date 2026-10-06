@@ -38,7 +38,7 @@ def test_parse_maida_xlsx_filters_and_normalizes_glosas(tmp_path: Path) -> None:
             "NRO PROTOCOLO",
             "NÚMERO GUIA",
             "PACIENTE",
-            "CÓDIGO PROCEDIMENTO",
+            "COD. PROCEDIMENTO",
             "DESCRIÇÃO PROCEDIMENTO",
             "QTD EXECUTADA",
             "VALOR APRESENTADO",
@@ -72,6 +72,7 @@ def test_parse_maida_xlsx_filters_and_normalizes_glosas(tmp_path: Path) -> None:
     assert len(records) == 1
     assert records[0]["numero_protocolo"] == "5583152"
     assert records[0]["codigo_glosa"] == "1714"
+    assert records[0]["codigo_servico"] == "30912199"
     assert records[0]["valor_glosa"] == Decimal("300.25")
     assert records[0]["valor_processado"] == Decimal("1200.50")
     assert records[0]["valor_liberado"] == Decimal("900.25")

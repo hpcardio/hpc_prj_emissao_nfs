@@ -108,7 +108,8 @@ def extract_and_load_maida_glosas(
         for document in result.selected_documents:
             downloaded = client.download(document)
             downloads.append(downloaded)
-            records.extend(_parse_glosa_records(downloaded))
+            parsed = _parse_glosa_records(downloaded)
+            records.extend(_enrich_glosa_records(parsed, downloaded, result))
 
     os.environ["DESTINATION__POSTGRES__CREDENTIALS"] = settings.database_url
     pipeline = dlt.pipeline(
@@ -143,6 +144,41 @@ def _parse_glosa_records(
             downloaded.document.file_name,
         )
         return []
+
+
+def _enrich_glosa_records(
+    records: list[dict[str, Any]],
+    downloaded: DownloadedMaidaDocument,
+    result: MaidaCompetencyResult,
+) -> list[dict[str, Any]]:
+    """Completa a carteira usando a guia elegivel do mesmo lote Maida."""
+    by_lot_id: dict[tuple[str, str], dict[str, Any]] = {}
+    by_lot_number: dict[tuple[str, str], dict[str, Any]] = {}
+    for guide in result.guides:
+        guide_number = _normalize_key(guide.get("numero_guia"))
+        if not guide_number:
+            continue
+        lot_id = _normalize_key(guide.get("lote_id"))
+        lot_number = _normalize_key(guide.get("identificador_lote"))
+        if lot_id:
+            by_lot_id[(lot_id, guide_number)] = guide
+        if lot_number:
+            by_lot_number[(lot_number, guide_number)] = guide
+
+    document_lot_id = _normalize_key(downloaded.document.lot_id)
+    for record in records:
+        guide_number = _normalize_key(record.get("numero_guia_senha"))
+        lot_number = _normalize_key(record.get("numero_lote"))
+        guide = by_lot_id.get((document_lot_id, guide_number))
+        if guide is None:
+            guide = by_lot_number.get((lot_number, guide_number))
+        if guide is not None:
+            record["codigo_beneficiario"] = guide.get("numero_carteira")
+    return records
+
+
+def _normalize_key(value: object) -> str:
+    return str(value or "").strip().upper()
 
 
 def select_scheduled_competencies(

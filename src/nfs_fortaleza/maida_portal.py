@@ -84,6 +84,7 @@ class MaidaCompetencyResult:
     summary_documents: tuple[MaidaDocument, ...]
     lot_documents: tuple[MaidaDocument, ...]
     lots: tuple[dict[str, Any], ...]
+    guides: tuple[dict[str, Any], ...] = ()
 
     @property
     def selected_documents(self) -> tuple[MaidaDocument, ...]:
@@ -241,6 +242,7 @@ class MaidaPortalClient:
         provider_id = self.resolve_provider_id()
         summary_documents = tuple(self._summary_documents(competency))
         lots: list[dict[str, Any]] = []
+        guides: list[dict[str, Any]] = []
         lot_documents: list[MaidaDocument] = []
         for lot_filter, source in (
             ("lotesGlosasNaoRecursadas", "lote_glosa_nao_recursado"),
@@ -250,6 +252,12 @@ class MaidaPortalClient:
                 details = self._lot_details(lot)
                 metadata = _lot_metadata(lot, details, source)
                 lots.append(metadata)
+                status = (
+                    "RECURSADA"
+                    if source == "lote_glosa_recursado"
+                    else "AGUARDANDO_RECURSO"
+                )
+                guides.extend(self._eligible_guides(metadata, status))
                 lot_documents.extend(
                     self._documents_from_payload(
                         details.get("demonstrativos", []),
@@ -264,7 +272,53 @@ class MaidaPortalClient:
             summary_documents=summary_documents,
             lot_documents=tuple(_deduplicate_documents(lot_documents)),
             lots=tuple(lots),
+            guides=tuple(guides),
         )
+
+    def _eligible_guides(
+        self,
+        lot: Mapping[str, Any],
+        status: str,
+    ) -> Iterator[dict[str, Any]]:
+        lot_id = lot.get("lote_id")
+        if not lot_id:
+            return
+        page = 0
+        while True:
+            response = self.session.get(
+                f"{self.settings.billing_api_url}/lote-recurso-glosa/"
+                f"lote-elegivel/{lot_id}/guias",
+                params={
+                    "loteId": lot_id,
+                    "situacaoGuiaElegivel": status,
+                    "page": page,
+                    "size": 100,
+                },
+                timeout=self.timeout_seconds,
+            )
+            self._raise_for_status(response, f"guias elegiveis do lote {lot_id}")
+            payload = self._json(response, f"guias elegiveis do lote {lot_id}")
+            content = payload.get("content", []) if isinstance(payload, dict) else []
+            if not isinstance(content, list):
+                raise MaidaPortalError("A lista de guias elegiveis e invalida.")
+            for guide in content:
+                if not isinstance(guide, dict):
+                    continue
+                yield {
+                    "lote_id": str(lot_id),
+                    "identificador_lote": lot.get("identificador_lote"),
+                    "guia_id": _first_value(guide, "id", "guiaId"),
+                    "numero_guia": _first_value(
+                        guide, "numeroGuiaOperadora", "numeroGuia"
+                    ),
+                    "numero_carteira": _first_value(
+                        guide, "carteiraBeneficiario", "numeroCartao"
+                    ),
+                }
+            total_pages = int(payload.get("totalPages", 0) or 0)
+            if not content or page + 1 >= total_pages:
+                break
+            page += 1
 
     def download(self, document: MaidaDocument) -> DownloadedMaidaDocument:
         response = self.session.get(

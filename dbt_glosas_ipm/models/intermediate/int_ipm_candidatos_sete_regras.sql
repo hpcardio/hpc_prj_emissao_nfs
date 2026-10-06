@@ -1,4 +1,44 @@
-with demonstrativos_legado as (
+with demonstrativos_maida as (
+    select
+        d.*,
+        upper(btrim(coalesce(d.numero_guia_senha, ''))) as guia_normalizada,
+        upper(btrim(coalesce(d.codigo_servico, ''))) as servico_normalizado,
+        ltrim(
+            regexp_replace(coalesce(d.codigo_beneficiario, ''), '[^0-9]', '', 'g'),
+            '0'
+        ) as carteira_normalizada
+    from {{ ref('stg_demonstrativo_processos_ipm') }} d
+    where d.origem_maida is not null
+), candidatos_maida_brutos as (
+    select distinct
+           0 as prioridade,
+           'maida_hpc_carteira_guia_codigo_item'::text as criterio,
+           d.id_registro,
+           d.numero_processo as numero_processo_resolvido,
+           i.*
+      from demonstrativos_maida d
+      join {{ ref('stg_hpc_itens_ipm') }} i
+        on i.nr_carteira_normalizada = d.carteira_normalizada
+       and i.nr_guia_normalizada = d.guia_normalizada
+       and d.servico_normalizado in (
+           i.cd_pro_fat_normalizado,
+           i.cd_tuss_normalizado
+       )
+     where d.carteira_normalizada <> ''
+       and d.guia_normalizada <> ''
+       and d.servico_normalizado <> ''
+), resumo_maida as (
+    select
+        id_registro,
+        count(distinct (cd_remessa, conta)) as quantidade_contextos
+    from candidatos_maida_brutos
+    group by id_registro
+), candidatos_maida as (
+    select candidato.*
+      from candidatos_maida_brutos candidato
+      join resumo_maida resumo using (id_registro)
+     where resumo.quantidade_contextos = 1
+), demonstrativos_legado as (
     select
         d.*,
         r.cd_remessa as cd_remessa_esperada,
@@ -30,6 +70,7 @@ with demonstrativos_legado as (
              2
          )
      and r.numero_protocolo = upper(btrim(d.numero_protocolo))
+    where d.origem_maida is null
 ), contextos_protocolos as (
     select distinct
         upper(btrim(numero_protocolo)) as numero_protocolo,
@@ -132,7 +173,8 @@ with demonstrativos_legado as (
            item.cd_pro_fat_normalizado,
            item.cd_tuss_normalizado
        )
-     where (
+     where d.origem_maida is null
+       and (
                nullif(btrim(d.numero_processo), '') is null
                or item.numero_processo_normalizado
                   = upper(btrim(d.numero_processo))
@@ -182,7 +224,8 @@ with demonstrativos_legado as (
         round(coalesce(d.valor_processado, 0)::numeric, 2)
             as valor_normalizado
     from {{ ref('stg_demonstrativo_processos_ipm') }} d
-    where not exists (
+    where d.origem_maida is null
+      and not exists (
         select 1
         from candidatos_relatorio direto
         where direto.id_registro = d.id_registro
@@ -477,6 +520,8 @@ with demonstrativos_legado as (
        and i.nr_carteira_normalizada = d.carteira_normalizada
        and i.valor_item = d.valor_normalizado
 ), candidatos as (
+    select * from candidatos_maida
+    union all
     select * from candidatos_relatorio
     union all
     select * from candidatos_fallback

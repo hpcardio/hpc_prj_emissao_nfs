@@ -47,6 +47,7 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "codigo servico",
         "cod servico",
         "codigo procedimento",
+        "cod procedimento",
         "procedimento",
     ),
     "grau_participacao": ("grau participacao", "grau part"),
@@ -216,7 +217,10 @@ def _source_metadata(
 
 def _record_id(record: dict[str, Any]) -> str:
     identity = {
-        key: value
+        # Estes campos sao enriquecidos/corrigidos depois da leitura. Eles nao
+        # podem alterar a chave de merge, inclusive para atualizar as linhas
+        # Maida que ja foram carregadas antes do enriquecimento.
+        key: None if key in {"codigo_servico", "codigo_beneficiario"} else value
         for key, value in record.items()
         if key not in {"id_registro"}
     }
