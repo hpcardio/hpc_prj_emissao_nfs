@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+from requests import HTTPError
+
 from nfs_fortaleza.maida_config import MaidaSettings
 from nfs_fortaleza.maida_portal import (
     MaidaCompetency,
@@ -198,3 +201,39 @@ def test_authenticate_uses_onepass_oauth_flow(tmp_path: Path) -> None:
         call for call in session.calls if call[1].endswith("/api/auth/signin/mfa")
     )
     assert signin_call[2]["json"]["clientId"] == "client-123"
+
+
+class _UnavailableLotsSession:
+    def __init__(self) -> None:
+        self.headers: dict[str, str] = {}
+
+    def get(self, url: str, **kwargs: Any) -> _Response:
+        response = _Response({"message": "indisponivel"}, 500)
+        error = HTTPError("server error")
+        error.response = response  # type: ignore[assignment]
+        raise error
+
+
+def test_server_error_in_lots_is_treated_as_temporarily_unavailable(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = MaidaSettings(
+        login="login",
+        password="password",
+        database_url="postgresql://example",
+        provider_id="provider-1",
+    )
+    client = MaidaPortalClient(settings, downloads_dir=tmp_path)
+    client.session = _UnavailableLotsSession()  # type: ignore[assignment]
+
+    lots = list(
+        client._analyzed_lots(
+            MaidaCompetency(2026, 6),
+            "provider-1",
+            "lotesGlosasRecursadas",
+        )
+    )
+
+    assert lots == []
+    assert "temporariamente indisponiveis" in caplog.text

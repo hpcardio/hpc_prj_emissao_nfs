@@ -11,6 +11,7 @@ from typing import Any, Iterable, Iterator, Mapping
 from urllib.parse import parse_qs, urlsplit
 
 from dlt.sources.helpers.requests import Session
+from requests import HTTPError
 
 from nfs_fortaleza.maida_config import MaidaSettings
 
@@ -332,12 +333,27 @@ class MaidaPortalClient:
                 "size": 100,
             }
             params[selected_filter] = True
-            response = self.session.get(
-                f"{self.settings.billing_api_url}/lote-recurso-glosa/"
-                "lotes-analisados/visao-prestador",
-                params=params,
-                timeout=self.timeout_seconds,
-            )
+            try:
+                response = self.session.get(
+                    f"{self.settings.billing_api_url}/lote-recurso-glosa/"
+                    "lotes-analisados/visao-prestador",
+                    params=params,
+                    timeout=self.timeout_seconds,
+                )
+            except HTTPError as exc:
+                status = getattr(exc.response, "status_code", 0)
+                if 500 <= status < 600:
+                    LOGGER.warning(
+                        "Lotes Maida temporariamente indisponiveis: "
+                        "competencia=%s filtro=%s pagina=%s HTTP=%s. "
+                        "A extracao seguira com os demais dados.",
+                        competency.label,
+                        selected_filter,
+                        page,
+                        status,
+                    )
+                    return
+                raise
             self._raise_for_status(
                 response,
                 f"lotes {selected_filter} {competency.label}",
