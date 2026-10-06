@@ -178,6 +178,29 @@ def test_fallback_nao_contradiz_guia_quando_ambas_estao_preenchidas():
         regra = modelo.split(inicio, 1)[1].split("union all", 1)[0]
         assert all(trecho in regra for trecho in protecao)
 
+
+def test_maida_usa_somente_chave_tripla_da_view_hpc():
+    raiz = Path(__file__).parents[1] / "dbt_glosas_ipm" / "models"
+    modelo = (
+        raiz / "intermediate" / "int_ipm_candidatos_sete_regras.sql"
+    ).read_text()
+    regra = modelo.split("candidatos_maida_brutos as (", 1)[1].split(
+        "), resumo_maida", 1
+    )[0]
+
+    assert "maida_hpc_carteira_guia_codigo_item" in regra
+    assert "i.nr_carteira_normalizada = d.carteira_normalizada" in regra
+    assert "i.nr_guia_normalizada = d.guia_normalizada" in regra
+    assert "i.cd_pro_fat_normalizado" in regra
+    assert "i.cd_tuss_normalizado" in regra
+    assert "valor_item =" not in regra
+
+    staging = (
+        raiz / "staging" / "stg_demonstrativo_processos_ipm.sql"
+    ).read_text()
+    assert "source('prontocardio', 'demonstrativo_conta_ipm')" in staging
+    assert "where origem_maida is not null" in staging
+
     for prioridade in (11, 16):
         inicio = f"select {prioridade} as prioridade" if prioridade == 11 else (
             f"select {prioridade}, 'relatorio_hpc_"

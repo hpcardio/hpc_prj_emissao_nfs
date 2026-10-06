@@ -82,6 +82,20 @@ class _Session:
                     ],
                 }
             )
+        if "/lote-elegivel/" in url and url.endswith("/guias"):
+            lot_id = url.split("/")[-2]
+            return _Response(
+                {
+                    "content": [
+                        {
+                            "id": f"guia-{lot_id}",
+                            "numeroGuiaOperadora": "521882",
+                            "carteiraBeneficiario": "000123456",
+                        }
+                    ],
+                    "totalPages": 1,
+                }
+            )
         raise AssertionError(f"Endpoint inesperado: {url}")
 
 
@@ -131,6 +145,8 @@ def test_collect_competency_uses_both_analyzed_lot_filters(tmp_path: Path) -> No
     result = client.collect_competency(MaidaCompetency(2026, 1))
 
     assert len(result.lots) == 2
+    assert len(result.guides) == 2
+    assert {item["numero_carteira"] for item in result.guides} == {"000123456"}
     assert len(result.selected_documents) == 2
     assert {item.source for item in result.selected_documents} == {
         "lote_glosa_nao_recursado",
@@ -142,6 +158,11 @@ def test_collect_competency_uses_both_analyzed_lot_filters(tmp_path: Path) -> No
     ]
     assert list_calls[0][2]["params"]["lotesGlosasNaoRecursadas"] is True
     assert list_calls[1][2]["params"]["lotesGlosasRecursadas"] is True
+    guide_calls = [call for call in session.calls if call[1].endswith("/guias")]
+    assert {call[2]["params"]["situacaoGuiaElegivel"] for call in guide_calls} == {
+        "AGUARDANDO_RECURSO",
+        "RECURSADA",
+    }
     assert session.headers["Authorization"].startswith("Bearer ")
 
 

@@ -74,6 +74,14 @@ def _periodo_fontes_glosas(destino) -> tuple[date, date] | None:
                    AND data_realizacao <
                        date_trunc('month', CURRENT_DATE) + INTERVAL '2 months'
                 UNION ALL
+                SELECT COALESCE(data_realizacao, referencia) AS data_referencia
+                  FROM api_prontocardio.demonstrativo_conta_ipm
+                 WHERE origem_maida IS NOT NULL
+                   AND COALESCE(valor_glosa, 0) > 0
+                   AND COALESCE(data_realizacao, referencia) >= DATE '2024-01-01'
+                   AND COALESCE(data_realizacao, referencia) <
+                       date_trunc('month', CURRENT_DATE) + INTERVAL '2 months'
+                UNION ALL
                 SELECT competencia AS data_referencia
                   FROM api_prontocardio.processos_relatorios_ipm
                  WHERE split_part(numero_processo, '/', 2)

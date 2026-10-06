@@ -114,9 +114,11 @@ def test_periodo_hpc_considera_demonstrativo_e_relatorios_spu():
         if "SELECT MIN(data_referencia), MAX(data_referencia)" in comando
     )
     assert "demonstrativo_processos_ipm" in consulta_periodo
+    assert "demonstrativo_conta_ipm" in consulta_periodo
+    assert "origem_maida IS NOT NULL" in consulta_periodo
     assert "processos_relatorios_ipm" in consulta_periodo
-    assert consulta_periodo.count("DATE '2024-01-01'") == 2
-    assert consulta_periodo.count("INTERVAL '2 months'") == 2
+    assert consulta_periodo.count("DATE '2024-01-01'") == 3
+    assert consulta_periodo.count("INTERVAL '2 months'") == 3
     assert "status_processo IN ('FINALIZADO', 'TRAMITANDO')" in consulta_periodo
 
 

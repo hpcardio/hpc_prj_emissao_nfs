@@ -44,6 +44,7 @@ select
     d.quantidade_executada,
     d.valor_processado,
     d.valor_liberado,
-    d.valor_glosa
+    d.valor_glosa,
+    d.origem_maida
 from {{ ref('stg_demonstrativo_processos_ipm') }} d
 join {{ ref('int_ipm_glosas_resolvidas') }} r using (id_registro)
