@@ -8,8 +8,6 @@ Para o portal ISS Fortaleza, o projeto usa endpoints HTTP JSF/Seam,
 preservando cookies, conversação e `javax.faces.ViewState`. O SPU exige um
 navegador Chromium para a paginação e reutiliza um perfil isolado autenticado.
 
-## Sumário
-
 - [Visão geral](#visão-geral)
 - [Configuração compartilhada](#configuração-compartilhada)
 - [Emissão de NFS-e — `emissao_nfse`](#emissão-de-nfs-e--emissao_nfse)

@@ -75,7 +75,7 @@ def _parse_tramitando_report_layout(
                         float(word["top"])
                         for word in words
                         if 250 <= float(word["x0"]) < 360
-                        and _fold(str(word["text"])).startswith("at")
+                        and _is_report_atendimento_header(str(word["text"]))
                     ),
                     default=None,
                 )
@@ -132,6 +132,11 @@ def _parse_report_competencia(text: str) -> date | None:
         _fold(text),
     )
     return date(int(match.group(2)), int(match.group(1)), 1) if match else None
+
+
+def _is_report_atendimento_header(text: str) -> bool:
+    folded = _fold(text)
+    return folded.startswith(("at", "al")) and folded.endswith("nto")
 
 
 def _cluster_words_by_top(
@@ -278,7 +283,7 @@ def _tramitando_report_record(
     paciente = _optional(values.get("nome_paciente"))
     competencia = _parse_competencia(values.get("competencia", ""))
     valor = _parse_decimal(values.get("valor", ""))
-    if cd_remessa is None or paciente is None or competencia is None or valor is None:
+    if cd_remessa is None or paciente is None or valor is None:
         return None
     atendimento_digits = _digits(values.get("cd_atendimento", ""))
     record = {
@@ -329,7 +334,12 @@ def _parse_competencia(value: str) -> date | None:
     match = re.search(r"\b(0?[1-9]|1[0-2])[/\-](\d{4})\b", value)
     if match:
         return date(int(match.group(2)), int(match.group(1)), 1)
-    parsed = _parse_date(value) if _optional(value) else None
+    if not _optional(value):
+        return None
+    try:
+        parsed = _parse_date(value)
+    except SpuPortalError:
+        return None
     return parsed.replace(day=1) if parsed else None
 
 

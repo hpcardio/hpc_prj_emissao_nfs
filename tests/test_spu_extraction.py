@@ -468,6 +468,71 @@ def test_report_extraction_does_not_fail_when_only_pending_documents_remain(
     assert summary.processos_com_erro == ("P100002/2026",)
 
 
+def test_report_extraction_does_not_fail_when_only_pending_documents_remain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    loaded_process = _process("P100001/2026", "TRAMITANDO")
+    pending_process = _process("P100002/2026", "TRAMITANDO")
+    pending_document = SimpleNamespace(
+        document_id="pending-document",
+        nome="relatorio_incompativel.pdf",
+        path=tmp_path / "relatorio_incompativel.pdf",
+    )
+
+    class FakePortalClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def iter_process_pages(self):
+            yield 1, (loaded_process, pending_process)
+
+        def download_process_report_documents(
+            self,
+            process: SpuProcessSummary,
+            *,
+            loaded_document_ids: set[str],
+        ):
+            if process.numero_processo == loaded_process.numero_processo:
+                return ()
+            return (pending_document,)
+
+    monkeypatch.setattr(
+        spu_extraction,
+        "list_processes_for_report",
+        lambda *_args: (loaded_process, pending_process),
+    )
+    monkeypatch.setattr(
+        spu_extraction,
+        "list_loaded_report_document_ids",
+        lambda *_args: set(),
+    )
+    monkeypatch.setattr(spu_extraction, "SpuPortalClient", FakePortalClient)
+    monkeypatch.setattr(spu_extraction, "_spu_pipeline", lambda *_args: object())
+    monkeypatch.setattr(
+        spu_extraction,
+        "parse_tramitando_report_documents",
+        lambda *_args: (_ for _ in ()).throw(
+            spu_extraction.SpuPortalError("formato incompatível")
+        ),
+    )
+
+    summary = extract_and_load_process_reports(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        downloads_dir=tmp_path,
+    )
+
+    assert summary.processos_ja_carregados == ("P100001/2026",)
+    assert summary.processos_processados == ()
+    assert summary.processos_com_erro == ("P100002/2026",)
+
+
 def test_report_process_query_includes_both_statuses_since_2024(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

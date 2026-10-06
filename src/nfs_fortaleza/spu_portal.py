@@ -254,6 +254,7 @@ class SpuPortalClient:
         page = self._require_page()
         self._open_process_list(page)
         self._wait_for_process_list(page)
+        previous_url = page.url
         search_input = self._process_search_input(page)
         search_input.fill(numero_processo)
 
@@ -290,29 +291,11 @@ class SpuPortalClient:
         if not submitted:
             search_input.press("Enter")
 
-        try:
-            page.wait_for_function(
-                r"""
-                (number) => {
-                  const compact = (value) => (value || '')
-                    .replace(/\s+/g, ' ').trim().toUpperCase()
-                    .replace('_', '/');
-                  const root = document.querySelector('#step-geral-listagem');
-                  const text = compact(root?.innerText);
-                  return text.includes(compact(number)) ||
-                    /nenhum\s+(processo|registro|resultado)|n[aã]o\s+encontrad/i
-                      .test(text);
-                }
-                """,
-                arg=numero_processo,
-                timeout=self.settings.page_timeout_seconds * 1000,
-            )
-        except PlaywrightTimeoutError as exc:
-            if self._is_login_page(page):
-                raise _session_expired_error() from exc
-            raise SpuPortalError(
-                f"A pesquisa do processo {numero_processo} nao respondeu."
-            ) from exc
+        self._wait_for_process_search_result(
+            page,
+            numero_processo,
+            previous_url=previous_url,
+        )
 
         raw_cards = page.locator("#step-geral-listagem").evaluate(
             PROCESS_CARDS_SCRIPT
@@ -323,6 +306,66 @@ class SpuPortalClient:
             if process.numero_processo.upper() == expected:
                 return process
         return None
+
+    def _wait_for_process_search_result(
+        self,
+        page: Page,
+        numero_processo: str,
+        *,
+        previous_url: str,
+    ) -> None:
+        try:
+            page.wait_for_function(
+                r"""
+                (state) => {
+                  const compact = (value) => (value || '')
+                    .replace(/\s+/g, ' ').trim().toUpperCase()
+                    .replace('_', '/');
+                  const root = document.querySelector('#step-geral-listagem');
+                  const text = compact(root?.innerText);
+                  const expected = compact(state.number);
+                  const navigated = location.href !== state.previousUrl;
+                  const matchingCard = Array.from(
+                    root?.querySelectorAll('.card') || []
+                  ).some((card) => {
+                    const header = card.querySelector('[id="step2-list-num"]');
+                    return compact(header?.innerText).includes(expected);
+                  });
+                  if (navigated && matchingCard) return true;
+
+                  const missing =
+                    /nenhum\s+(processo|registro|resultado)|n[aã]o\s+encontrad/i
+                      .test(text);
+                  if (!missing || !navigated) {
+                    delete window.__spuMissingSearchResult;
+                    return false;
+                  }
+
+                  const key = `${expected}|${location.href}`;
+                  const marker = window.__spuMissingSearchResult;
+                  if (!marker || marker.key !== key) {
+                    window.__spuMissingSearchResult = {
+                      key,
+                      since: Date.now(),
+                    };
+                    return false;
+                  }
+                  return Date.now() - marker.since >= state.stabilityMs;
+                }
+                """,
+                arg={
+                    "number": numero_processo,
+                    "previousUrl": previous_url,
+                    "stabilityMs": 5000,
+                },
+                timeout=self.settings.page_timeout_seconds * 1000,
+            )
+        except PlaywrightTimeoutError as exc:
+            if self._is_login_page(page):
+                raise _session_expired_error() from exc
+            raise SpuPortalError(
+                f"A pesquisa do processo {numero_processo} nao respondeu."
+            ) from exc
 
     def _process_search_input(self, page: Page):
         current_search = page.locator(

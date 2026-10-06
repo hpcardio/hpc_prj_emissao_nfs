@@ -9,6 +9,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .env
+.env.before-*
+airflow_settings.yaml.before-*
 airflow_settings.yaml
 airflow.db
 airflow.cfg
