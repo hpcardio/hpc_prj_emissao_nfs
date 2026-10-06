@@ -32,6 +32,7 @@ COPY plugins ./plugins
 
 RUN mkdir -p /usr/local/airflow/data/nfse \
         /usr/local/airflow/data/ipm \
+        /usr/local/airflow/data/maida \
         /usr/local/airflow/data/spu \
         /usr/local/airflow/data/artifacts \
     && chown -R astro:0 /usr/local/airflow
