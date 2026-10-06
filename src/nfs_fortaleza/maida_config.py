@@ -16,6 +16,7 @@ class MaidaSettings:
     postgres_schema: str = "api_prontocardio"
     provider_id: str | None = None
     accounts_api_url: str = "https://accounts-api.issec.maida.health"
+    onepass_url: str = "https://onepass.mv.com.br"
     users_api_url: str = "https://gestao-usuarios-api.issec.maida.health"
     provider_api_url: str = "https://credenciamento-api.issec.maida.health"
     billing_api_url: str = "https://faturamento-prestador-api.issec.maida.health"
@@ -42,6 +43,10 @@ def load_maida_settings() -> MaidaSettings:
         accounts_api_url=os.getenv(
             "MAIDA_ACCOUNTS_API_URL",
             "https://accounts-api.issec.maida.health",
+        ).rstrip("/"),
+        onepass_url=os.getenv(
+            "MAIDA_ONEPASS_URL",
+            "https://onepass.mv.com.br",
         ).rstrip("/"),
         users_api_url=os.getenv(
             "MAIDA_USERS_API_URL",

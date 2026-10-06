@@ -16,10 +16,18 @@ from nfs_fortaleza.maida_portal import (
 
 
 class _Response:
-    def __init__(self, payload: object, status_code: int = 200) -> None:
+    def __init__(
+        self,
+        payload: object,
+        status_code: int = 200,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self._payload = payload
         self.status_code = status_code
         self.content = b""
+        self.headers = headers or {}
+        self.text = payload if isinstance(payload, str) else json.dumps(payload)
 
     def json(self) -> object:
         return self._payload
@@ -114,6 +122,8 @@ def test_collect_competency_uses_both_analyzed_lot_filters(tmp_path: Path) -> No
     client = MaidaPortalClient(settings, downloads_dir=tmp_path)
     session = _Session()
     client.session = session  # type: ignore[assignment]
+    client._authenticated = True
+    session.headers["Authorization"] = "Bearer token-sem-expor-credencial"
 
     result = client.collect_competency(MaidaCompetency(2026, 1))
 
@@ -130,3 +140,61 @@ def test_collect_competency_uses_both_analyzed_lot_filters(tmp_path: Path) -> No
     assert list_calls[0][2]["params"]["lotesGlosasNaoRecursadas"] is True
     assert list_calls[1][2]["params"]["lotesGlosasRecursadas"] is True
     assert session.headers["Authorization"].startswith("Bearer ")
+
+
+class _OnePassSession:
+    def __init__(self) -> None:
+        self.headers: dict[str, str] = {}
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def get(self, url: str, **kwargs: Any) -> _Response:
+        self.calls.append(("GET", url, kwargs))
+        if url.endswith("/login/onepass/get-auth-url"):
+            return _Response(
+                "https://onepass.mv.com.br/oauth2/auth?"
+                "client_id=client-123&redirect_uri=https%3A%2F%2Faccounts.example%2Fcallback&"
+                "response_type=code"
+            )
+        if "/api/token/getAuthorizationCode/" in url:
+            return _Response("authorization-code")
+        if url.endswith("/login/one-pass/auth/token"):
+            return _Response(
+                "",
+                302,
+                headers={"Location": "https://issec.maida.health/sso/login?token=maida-token"},
+            )
+        raise AssertionError(f"Endpoint GET inesperado: {url}")
+
+    def post(self, url: str, **kwargs: Any) -> _Response:
+        self.calls.append(("POST", url, kwargs))
+        if url.endswith("/api/token/authorize"):
+            return _Response("ok")
+        if url.endswith("/api/auth/presignin"):
+            return _Response({"uuidUserData": "user-123", "email": "masked"})
+        if url.endswith("/api/auth/signin/mfa"):
+            return _Response({"token": "access-token", "uuidUserData": "user-123"})
+        if url.endswith("/api/auth/refresh_token"):
+            return _Response("", 204, headers={"Authorization": "Bearer refreshed-token"})
+        raise AssertionError(f"Endpoint POST inesperado: {url}")
+
+
+def test_authenticate_uses_onepass_oauth_flow(tmp_path: Path) -> None:
+    settings = MaidaSettings(
+        login="login",
+        password="password",
+        database_url="postgresql://example",
+    )
+    client = MaidaPortalClient(settings, downloads_dir=tmp_path)
+    session = _OnePassSession()
+    client.session = session  # type: ignore[assignment]
+
+    assert client.authenticate() == "maida-token"
+    assert session.headers["Authorization"] == "Bearer maida-token"
+    paths = [url for _, url, _ in session.calls]
+    assert any(path.endswith("/api/auth/presignin") for path in paths)
+    assert any(path.endswith("/api/auth/signin/mfa") for path in paths)
+    assert any(path.endswith("/login/one-pass/auth/token") for path in paths)
+    signin_call = next(
+        call for call in session.calls if call[1].endswith("/api/auth/signin/mfa")
+    )
+    assert signin_call[2]["json"]["clientId"] == "client-123"

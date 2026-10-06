@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
+from urllib.parse import parse_qs, urlsplit
 
 from dlt.sources.helpers.requests import Session
 
@@ -118,22 +119,100 @@ class MaidaPortalClient:
         if self._authenticated:
             authorization = self.session.headers.get("Authorization", "")
             return authorization.removeprefix("Bearer ")
-        response = self.session.post(
-            f"{self.settings.accounts_api_url}/login",
-            json={
-                "login": self.settings.login,
-                "password": self.settings.password,
-            },
-            timeout=self.timeout_seconds,
-        )
-        self._raise_for_status(response, "autenticacao")
-        payload = self._json(response, "autenticacao")
-        token = payload.get("maidaToken") if isinstance(payload, dict) else None
+        token = self._authenticate_onepass()
         if not token:
-            raise MaidaPortalError("A autenticacao Maida nao retornou maidaToken.")
+            raise MaidaPortalError("A autenticacao OnePass nao retornou o token Maida.")
         self.session.headers["Authorization"] = f"Bearer {token}"
         self._authenticated = True
         return str(token)
+
+    def _authenticate_onepass(self) -> str:
+        auth_url_response = self.session.get(
+            f"{self.settings.accounts_api_url}/login/onepass/get-auth-url",
+            timeout=self.timeout_seconds,
+        )
+        self._raise_for_status(auth_url_response, "URL de autenticacao OnePass")
+        auth_url = _response_text_value(auth_url_response)
+        auth_query = parse_qs(urlsplit(auth_url).query)
+        client_id = _required_query_value(auth_query, "client_id")
+        redirect_uri = _required_query_value(auth_query, "redirect_uri")
+        response_type = auth_query.get("response_type", ["code"])[0]
+
+        response = self.session.post(
+            f"{self.settings.onepass_url}/api/token/authorize",
+            json={
+                "client_id": client_id,
+                "environment": "PRD",
+                "response_type": response_type,
+                "redirect_uri": redirect_uri,
+                "type": "oauth2",
+            },
+            timeout=self.timeout_seconds,
+        )
+        self._raise_for_status(response, "autorizacao do cliente OnePass")
+
+        credentials = {
+            "username": self.settings.login,
+            "password": self.settings.password,
+            "recaptchaClientResult": "",
+        }
+        response = self.session.post(
+            f"{self.settings.onepass_url}/api/auth/presignin",
+            json=credentials,
+            timeout=self.timeout_seconds,
+        )
+        self._raise_for_status(response, "pre-autenticacao OnePass")
+        pre_signin = self._json(response, "pre-autenticacao OnePass")
+        if not isinstance(pre_signin, dict):
+            raise MaidaPortalError("A pre-autenticacao OnePass retornou dados invalidos.")
+
+        response = self.session.post(
+            f"{self.settings.onepass_url}/api/auth/signin/mfa",
+            json={**pre_signin, **credentials, "clientId": client_id},
+            timeout=self.timeout_seconds,
+        )
+        self._raise_for_status(response, "autenticacao OnePass")
+        signin = self._json(response, "autenticacao OnePass")
+        if not isinstance(signin, dict):
+            raise MaidaPortalError("A autenticacao OnePass retornou dados invalidos.")
+        access_token = _first_value(signin, "token", "accessToken")
+        user_id = _first_value(signin, "uuidUserData")
+        if not access_token or not user_id:
+            raise MaidaPortalError(
+                "A autenticacao OnePass nao retornou token e usuario."
+            )
+
+        response = self.session.post(
+            f"{self.settings.onepass_url}/api/auth/refresh_token",
+            params={"client_id": client_id},
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=self.timeout_seconds,
+        )
+        self._raise_for_status(response, "renovacao do token OnePass")
+        refreshed_token = response.headers.get("Authorization", "").removeprefix(
+            "Bearer "
+        )
+        if not refreshed_token:
+            raise MaidaPortalError("O OnePass nao retornou o token renovado.")
+
+        response = self.session.get(
+            f"{self.settings.onepass_url}/api/token/getAuthorizationCode/{user_id}",
+            headers={"Authorization": f"Bearer {refreshed_token}"},
+            timeout=self.timeout_seconds,
+        )
+        self._raise_for_status(response, "codigo de autorizacao OnePass")
+        authorization_code = _response_text_value(response)
+
+        response = self.session.get(
+            f"{self.settings.accounts_api_url}/login/one-pass/auth/token",
+            params={"code": authorization_code},
+            allow_redirects=False,
+            timeout=self.timeout_seconds,
+        )
+        if response.status_code not in (301, 302, 303, 307, 308):
+            self._raise_for_status(response, "troca do token OnePass")
+        location = response.headers.get("Location", "")
+        return parse_qs(urlsplit(location).query).get("token", [""])[0]
 
     def resolve_provider_id(self) -> str:
         token = self.authenticate()
@@ -362,6 +441,45 @@ def _jwt_subject(token: str) -> str:
     if not subject:
         raise MaidaPortalError("O token Maida nao contem o identificador sub.")
     return str(subject)
+
+
+def _response_text_value(response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = getattr(response, "text", "")
+    if isinstance(payload, str):
+        value = payload.strip().strip('"')
+    else:
+        value = _find_first_string(payload)
+    if not value:
+        raise MaidaPortalError("O endpoint de autenticacao retornou valor vazio.")
+    return value
+
+
+def _find_first_string(payload: object) -> str:
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, Mapping):
+        for value in payload.values():
+            found = _find_first_string(value)
+            if found:
+                return found
+    if isinstance(payload, list):
+        for value in payload:
+            found = _find_first_string(value)
+            if found:
+                return found
+    return ""
+
+
+def _required_query_value(query: Mapping[str, list[str]], name: str) -> str:
+    values = query.get(name, [])
+    if not values or not values[0]:
+        raise MaidaPortalError(
+            f"A URL de autenticacao OnePass nao contem o parametro {name}."
+        )
+    return values[0]
 
 
 def _first_value(payload: Mapping[str, Any], *names: str) -> Any | None:
