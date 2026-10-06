@@ -221,6 +221,40 @@ O pool `nfse_portal` possui um slot e serializa o acesso ao portal. Em um
 deployment Astro, armazene conexão e credenciais no painel ou em um secret
 backend.
 
+## Glosas Maida/ISSEC — `extracao_glosas_maida`
+
+A DAG acessa exclusivamente as APIs usadas pelo portal Maida, sem automação de
+cliques. Ela autentica no serviço de contas, identifica o prestador vinculado,
+consulta o Resumo e os lotes analisados e baixa os demonstrativos XLSX pelo
+endpoint de arquivos.
+
+Na primeira execução são verificadas todas as competências de janeiro de 2026
+até o mês corrente. Nas execuções seguintes, competências históricas já
+consultadas são preservadas e os três meses mais recentes são verificados
+novamente a cada execução, inclusive quando o arquivo ainda não tiver sido
+disponibilizado pelo portal.
+
+Somente linhas que possuam `Valor Glosa` maior que zero e um `Código Glosa`
+numérico são carregadas em `demonstrativo_conta_ipm`. O carregamento `dlt` usa
+chave estável e `merge`, permitindo reprocessamentos sem duplicação. Ao final,
+a DAG aciona `materializacao_glosas_ipm`, que alimenta os registros exibidos no
+Follow-Up de Glosas.
+
+Credenciais reais devem ficar no secret backend do Airflow ou no `.env` não
+versionado:
+
+```dotenv
+MAIDA_LOGIN=...
+MAIDA_PASSWORD='...'
+MAIDA_POSTGRES_CONN_ID=postgres_prontocardio
+```
+
+Uma execução manual pode limitar o período com `dag_run.conf`:
+
+```json
+{"competencias": ["01/2026", "02/2026"]}
+```
+
 ## Emissão de NFS-e — `emissao_nfse`
 
 ### Objetivo e arquivos
