@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -18,7 +19,7 @@ from nfs_fortaleza.maida_portal import (
     MaidaDocument,
     MaidaPortalClient,
 )
-from nfs_fortaleza.maida_xlsx import parse_maida_xlsx
+from nfs_fortaleza.maida_xlsx import MaidaSpreadsheetError, parse_maida_xlsx
 
 
 START_COMPETENCY = MaidaCompetency(2026, 1)
@@ -26,6 +27,7 @@ CONTROL_TABLE = "maida_competencias_glosa"
 DOCUMENT_TABLE = "maida_documentos_glosa"
 LOT_TABLE = "maida_lotes_glosa"
 TARGET_TABLE = "demonstrativo_conta_ipm"
+logger = logging.getLogger(__name__)
 
 
 class MaidaExtractionConfigurationError(ValueError):
@@ -106,7 +108,7 @@ def extract_and_load_maida_glosas(
         for document in result.selected_documents:
             downloaded = client.download(document)
             downloads.append(downloaded)
-            records.extend(parse_maida_xlsx(downloaded))
+            records.extend(_parse_glosa_records(downloaded))
 
     os.environ["DESTINATION__POSTGRES__CREDENTIALS"] = settings.database_url
     pipeline = dlt.pipeline(
@@ -128,6 +130,19 @@ def extract_and_load_maida_glosas(
         lots=sum(len(result.lots) for result in results),
         glosa_records=len(records),
     )
+
+
+def _parse_glosa_records(
+    downloaded: DownloadedMaidaDocument,
+) -> list[dict[str, Any]]:
+    try:
+        return list(parse_maida_xlsx(downloaded))
+    except MaidaSpreadsheetError:
+        logger.warning(
+            "Demonstrativo Maida sem colunas de glosa; arquivo ignorado: %s",
+            downloaded.document.file_name,
+        )
+        return []
 
 
 def select_scheduled_competencies(
