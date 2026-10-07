@@ -12,22 +12,10 @@ select
     nm_convenio,
     tp_atendimento,
     upper(btrim(coalesce(nr_guia, ''))) as nr_guia_normalizada,
-    ltrim(
-        regexp_replace(coalesce(nr_guia, ''), '[^0-9]', '', 'g'),
-        '0'
-    ) as nr_guia_chave_maida,
     regexp_replace(coalesce(nr_carteira, ''), '[^0-9]', '', 'g')::text as nr_carteira_normalizada_com_zero,
     ltrim(regexp_replace(coalesce(nr_carteira, ''), '[^0-9]', '', 'g'), '0') as nr_carteira_normalizada,
     upper(btrim(coalesce(cd_pro_fat, ''))) as cd_pro_fat_normalizado,
     upper(btrim(coalesce(cd_tuss, ''))) as cd_tuss_normalizado,
-    ltrim(
-        regexp_replace(coalesce(cd_pro_fat, ''), '[^0-9]', '', 'g'),
-        '0'
-    ) as cd_pro_fat_chave_maida,
-    ltrim(
-        regexp_replace(coalesce(cd_tuss, ''), '[^0-9]', '', 'g'),
-        '0'
-    ) as cd_tuss_chave_maida,
     descricao,
     dt_atendimento,
     dt_alta,

@@ -33,10 +33,27 @@ with demonstrativos_maida as (
            i.*
       from demonstrativos_maida d
       join {{ ref('stg_hpc_itens_ipm') }} i
-        on i.nr_guia_chave_maida = d.guia_normalizada
+        on ltrim(
+               regexp_replace(
+                   coalesce(i.nr_guia_normalizada, ''), '[^0-9]', '', 'g'
+               ),
+               '0'
+           ) = d.guia_normalizada
        and d.servico_normalizado in (
-           i.cd_pro_fat_chave_maida,
-           i.cd_tuss_chave_maida
+           ltrim(
+               regexp_replace(
+                   coalesce(i.cd_pro_fat_normalizado, ''),
+                   '[^0-9]', '', 'g'
+               ),
+               '0'
+           ),
+           ltrim(
+               regexp_replace(
+                   coalesce(i.cd_tuss_normalizado, ''),
+                   '[^0-9]', '', 'g'
+               ),
+               '0'
+           )
        )
        and (
            d.carteira_normalizada = ''

@@ -220,9 +220,9 @@ def test_maida_usa_chave_tripla_ou_guia_item_sem_carteira():
     assert "when d.carteira_normalizada = ''" in regra
     assert "d.carteira_normalizada = ''" in regra
     assert "i.nr_carteira_normalizada = d.carteira_normalizada" in regra
-    assert "i.nr_guia_chave_maida = d.guia_normalizada" in regra
-    assert "i.cd_pro_fat_chave_maida" in regra
-    assert "i.cd_tuss_chave_maida" in regra
+    assert "coalesce(i.nr_guia_normalizada, '')" in regra
+    assert "coalesce(i.cd_pro_fat_normalizado, '')" in regra
+    assert "coalesce(i.cd_tuss_normalizado, '')" in regra
     assert "regexp_replace" in modelo
     assert "'[^0-9]', '', 'g'" in modelo
     assert "valor_item =" not in regra
@@ -233,6 +233,7 @@ def test_maida_usa_chave_tripla_ou_guia_item_sem_carteira():
     assert "source('prontocardio', 'demonstrativo_conta_ipm')" in staging
     assert "where origem_maida is not null" in staging
     assert "maida.origem_maida is not null" in staging
+    assert "chave_maida" not in staging
     assert (
         "maida.id_registro::text = demonstrativo_processos_ipm.id_registro::text"
         in staging
