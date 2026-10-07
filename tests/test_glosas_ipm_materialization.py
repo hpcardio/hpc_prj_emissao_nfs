@@ -179,7 +179,7 @@ def test_fallback_nao_contradiz_guia_quando_ambas_estao_preenchidas():
         assert all(trecho in regra for trecho in protecao)
 
 
-def test_maida_usa_somente_chave_tripla_da_view_hpc():
+def test_maida_usa_chave_tripla_ou_guia_item_sem_carteira():
     raiz = Path(__file__).parents[1] / "dbt_glosas_ipm" / "models"
     modelo = (
         raiz / "intermediate" / "int_ipm_candidatos_sete_regras.sql"
@@ -189,6 +189,9 @@ def test_maida_usa_somente_chave_tripla_da_view_hpc():
     )[0]
 
     assert "maida_hpc_carteira_guia_codigo_item" in regra
+    assert "maida_hpc_guia_codigo_item_sem_carteira" in regra
+    assert "when d.carteira_normalizada = ''" in regra
+    assert "d.carteira_normalizada = ''" in regra
     assert "i.nr_carteira_normalizada = d.carteira_normalizada" in regra
     assert "i.nr_guia_normalizada = d.guia_normalizada" in regra
     assert "i.cd_pro_fat_normalizado" in regra

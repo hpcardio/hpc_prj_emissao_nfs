@@ -11,21 +11,28 @@ with demonstrativos_maida as (
     where d.origem_maida is not null
 ), candidatos_maida_brutos as (
     select distinct
-           0 as prioridade,
-           'maida_hpc_carteira_guia_codigo_item'::text as criterio,
+           case when d.carteira_normalizada = '' then 1 else 0 end
+               as prioridade,
+           case
+               when d.carteira_normalizada = ''
+                   then 'maida_hpc_guia_codigo_item_sem_carteira'
+               else 'maida_hpc_carteira_guia_codigo_item'
+           end::text as criterio,
            d.id_registro,
            d.numero_processo as numero_processo_resolvido,
            i.*
       from demonstrativos_maida d
       join {{ ref('stg_hpc_itens_ipm') }} i
-        on i.nr_carteira_normalizada = d.carteira_normalizada
-       and i.nr_guia_normalizada = d.guia_normalizada
+        on i.nr_guia_normalizada = d.guia_normalizada
        and d.servico_normalizado in (
            i.cd_pro_fat_normalizado,
            i.cd_tuss_normalizado
        )
-     where d.carteira_normalizada <> ''
-       and d.guia_normalizada <> ''
+       and (
+           d.carteira_normalizada = ''
+           or i.nr_carteira_normalizada = d.carteira_normalizada
+       )
+     where d.guia_normalizada <> ''
        and d.servico_normalizado <> ''
 ), resumo_maida as (
     select
