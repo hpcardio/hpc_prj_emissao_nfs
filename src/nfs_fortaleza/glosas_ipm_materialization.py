@@ -120,7 +120,7 @@ WITH pendentes AS (
                WHEN BTRIM(COALESCE(demo.numero_lote, '')) ~ '^[0-9]+$'
                    THEN LEAST(demo.numero_lote::BIGINT, 2147483647)::INTEGER
                ELSE 1000000000 + (
-                   ABS(HASHTEXTENDED(COALESCE(demo.numero_lote, demo.id_registro), 0))
+                   ABS(HASHTEXTEXTENDED(COALESCE(demo.numero_lote, demo.id_registro), 0))
                    % 1000000000
                )::INTEGER
            END AS remessa_maida,
@@ -128,12 +128,12 @@ WITH pendentes AS (
                WHEN BTRIM(COALESCE(demo.numero_guia_senha, '')) ~ '^[0-9]+$'
                    THEN LEAST(demo.numero_guia_senha::BIGINT, 2147483647)::INTEGER
                ELSE 1000000000 + (
-                   ABS(HASHTEXTENDED(demo.id_registro || '|conta', 0))
+                   ABS(HASHTEXTEXTENDED(demo.id_registro || '|conta', 0))
                    % 1000000000
                )::INTEGER
            END AS conta_maida,
            1000000000 + (
-               ABS(HASHTEXTENDED(demo.id_registro || '|lancamento', 0))
+               ABS(HASHTEXTEXTENDED(demo.id_registro || '|lancamento', 0))
                % 1000000000
            )::INTEGER AS lancamento_maida
       FROM api_prontocardio.glossas_nao_vinculadas_ipm AS glosa
