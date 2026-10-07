@@ -2,16 +2,22 @@ from __future__ import annotations
 
 
 RECONCILIAR_REGISTROS_SQL = """
-WITH rastreados_obsoletos AS (
+WITH fontes_atuais AS (
+    SELECT id_registro FROM api_prontocardio.glosas_ipm_vinculadas
+    UNION
+    SELECT id_registro
+      FROM api_prontocardio.demonstrativo_conta_ipm
+     WHERE origem_maida IS NOT NULL AND COALESCE(valor_glosa, 0) > 0
+), rastreados_obsoletos AS (
     SELECT DISTINCT rastreio.registro_glosa_id
       FROM api_prontocardio.registros_glosa_demonstrativo_ipm AS rastreio
-      LEFT JOIN api_prontocardio.glosas_ipm_vinculadas AS atual
+      LEFT JOIN fontes_atuais AS atual
         ON atual.id_registro = rastreio.id_registro
      WHERE atual.id_registro IS NULL
 ), rastreados_vigentes AS (
     SELECT DISTINCT rastreio.registro_glosa_id
       FROM api_prontocardio.registros_glosa_demonstrativo_ipm AS rastreio
-      JOIN api_prontocardio.glosas_ipm_vinculadas AS atual
+      JOIN fontes_atuais AS atual
         ON atual.id_registro = rastreio.id_registro
 )
 UPDATE api_prontocardio.registros_glosa AS registro
@@ -34,15 +40,197 @@ UPDATE api_prontocardio.registros_glosa AS registro
 
 
 REMOVER_RASTREIOS_OBSOLETOS_SQL = """
+WITH fontes_atuais AS (
+    SELECT id_registro FROM api_prontocardio.glosas_ipm_vinculadas
+    UNION
+    SELECT id_registro
+      FROM api_prontocardio.demonstrativo_conta_ipm
+     WHERE origem_maida IS NOT NULL AND COALESCE(valor_glosa, 0) > 0
+)
 DELETE FROM api_prontocardio.registros_glosa_demonstrativo_ipm AS rastreio
  USING api_prontocardio.registros_glosa AS registro
  WHERE registro.id = rastreio.registro_glosa_id
    AND registro.origem_registro IN ('triagem', 'conciliacao')
    AND NOT EXISTS (
        SELECT 1
-         FROM api_prontocardio.glosas_ipm_vinculadas AS atual
+         FROM fontes_atuais AS atual
         WHERE atual.id_registro = rastreio.id_registro
    )
+"""
+
+
+VINCULAR_TRATATIVAS_MANUAIS_MAIDA_SQL = """
+WITH pendentes AS (
+    SELECT demo.id_registro,
+           UPPER(BTRIM(demo.numero_guia_senha)) AS guia,
+           UPPER(BTRIM(demo.codigo_servico)) AS codigo_item
+      FROM api_prontocardio.glossas_nao_vinculadas_ipm AS glosa
+      JOIN api_prontocardio.demonstrativo_conta_ipm AS demo
+        ON demo.id_registro = glosa.id_registro
+     WHERE demo.origem_maida IS NOT NULL
+       AND COALESCE(demo.valor_glosa, 0) > 0
+       AND NULLIF(BTRIM(demo.numero_guia_senha), '') IS NOT NULL
+       AND NULLIF(BTRIM(demo.codigo_servico), '') IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+             FROM api_prontocardio.registros_glosa_demonstrativo_ipm r
+            WHERE r.id_registro = demo.id_registro
+       )
+       AND NOT EXISTS (
+           SELECT 1
+             FROM api_prontocardio.registros_glosa r
+            WHERE r.processo_controle_fatura_gab =
+                  'MAIDA-' || COALESCE(NULLIF(BTRIM(demo.numero_lote), ''),
+                                       TO_CHAR(demo.referencia, 'YYYYMM'))
+              AND UPPER(BTRIM(r.guia)) = UPPER(BTRIM(COALESCE(
+                  demo.numero_guia_senha, '-')))
+              AND UPPER(BTRIM(r.procedimento)) = UPPER(BTRIM(COALESCE(
+                  demo.codigo_servico, '-')))
+              AND r.motivo_glosa IS NOT DISTINCT FROM
+                  NULLIF(BTRIM(demo.codigo_glosa), '')
+              AND r.sn_ativo = 'true'
+       )
+), candidatos AS (
+    SELECT pendente.id_registro, registro.id AS registro_glosa_id,
+           COUNT(*) OVER (PARTITION BY pendente.id_registro) AS quantidade
+      FROM pendentes AS pendente
+      JOIN api_prontocardio.registros_glosa AS registro
+        ON UPPER(BTRIM(registro.guia)) = pendente.guia
+       AND pendente.codigo_item IN (
+           UPPER(BTRIM(registro.procedimento)),
+           UPPER(BTRIM(COALESCE(registro.cd_tuss, '')))
+       )
+       AND registro.sn_ativo = 'true'
+)
+INSERT INTO api_prontocardio.registros_glosa_demonstrativo_ipm (
+    id_registro, registro_glosa_id, criterio_correspondencia
+)
+SELECT id_registro, registro_glosa_id,
+       'maida_tratativa_manual_guia_codigo_item'
+  FROM candidatos
+ WHERE quantidade = 1
+ON CONFLICT (id_registro) DO NOTHING
+"""
+
+
+MATERIALIZAR_MAIDA_PENDENTE_SQL = """
+WITH pendentes AS (
+    SELECT demo.*,
+           CASE
+               WHEN BTRIM(COALESCE(demo.numero_lote, '')) ~ '^[0-9]+$'
+                   THEN LEAST(demo.numero_lote::BIGINT, 2147483647)::INTEGER
+               ELSE 1000000000 + (
+                   ABS(HASHTEXTENDED(COALESCE(demo.numero_lote, demo.id_registro), 0))
+                   % 1000000000
+               )::INTEGER
+           END AS remessa_maida,
+           CASE
+               WHEN BTRIM(COALESCE(demo.numero_guia_senha, '')) ~ '^[0-9]+$'
+                   THEN LEAST(demo.numero_guia_senha::BIGINT, 2147483647)::INTEGER
+               ELSE 1000000000 + (
+                   ABS(HASHTEXTENDED(demo.id_registro || '|conta', 0))
+                   % 1000000000
+               )::INTEGER
+           END AS conta_maida,
+           1000000000 + (
+               ABS(HASHTEXTENDED(demo.id_registro || '|lancamento', 0))
+               % 1000000000
+           )::INTEGER AS lancamento_maida
+      FROM api_prontocardio.glossas_nao_vinculadas_ipm AS glosa
+      JOIN api_prontocardio.demonstrativo_conta_ipm AS demo
+        ON demo.id_registro = glosa.id_registro
+     WHERE demo.origem_maida IS NOT NULL
+       AND COALESCE(demo.valor_glosa, 0) > 0
+       AND NOT EXISTS (
+           SELECT 1
+             FROM api_prontocardio.registros_glosa_demonstrativo_ipm r
+            WHERE r.id_registro = demo.id_registro
+       )
+       AND NOT EXISTS (
+           SELECT 1
+             FROM api_prontocardio.registros_glosa r
+            WHERE r.processo_controle_fatura_gab =
+                  'MAIDA-' || COALESCE(NULLIF(BTRIM(demo.numero_lote), ''),
+                                       TO_CHAR(demo.referencia, 'YYYYMM'))
+              AND UPPER(BTRIM(r.guia)) = UPPER(BTRIM(COALESCE(
+                  demo.numero_guia_senha, '-')))
+              AND UPPER(BTRIM(r.procedimento)) = UPPER(BTRIM(COALESCE(
+                  demo.codigo_servico, '-')))
+              AND r.motivo_glosa IS NOT DISTINCT FROM
+                  NULLIF(BTRIM(demo.codigo_glosa), '')
+              AND r.sn_ativo = 'true'
+       )
+)
+INSERT INTO api_prontocardio.registros_glosa (
+    codigo_paciente, nm_paciente, cd_remessa, cd_atendimento, conta,
+    cd_prestador, cd_convenio, tp_atendimento, procedimento, convenio,
+    guia, prestador, data_atendimento, valor,
+    processo_controle_fatura_gab, processo_recurso, data_glosa,
+    motivo_glosa, descricao_glosa, qtd_recursado, valor_recursado,
+    dt_recurso, dt_pagamento, dt_recebimento, valor_recebido,
+    qtd_recebida, observacao_recebimento, cd_lancamento, qtd_registro,
+    descricao_item, data_alta, data_lancamento, cd_gru_pro, ds_gru_pro,
+    cd_gru_fat, ds_gru_fat, cd_tuss, conciliacao_remessa_id,
+    origem_registro, sn_glosado, sn_ativo, numero_lote
+)
+SELECT 0,
+       COALESCE(NULLIF(BTRIM(item.nome_beneficiario), ''),
+                'Guia ' || COALESCE(NULLIF(BTRIM(item.numero_guia_senha), ''),
+                                    'não informada')),
+       item.remessa_maida, 0, item.conta_maida, 0, 10, 'Externo',
+       COALESCE(NULLIF(BTRIM(item.codigo_servico), ''), '-'), 'ISSEC',
+       COALESCE(NULLIF(BTRIM(item.numero_guia_senha), ''), '-'),
+       'HOSPITAL PRONTOCARDIO',
+       COALESCE(item.data_realizacao::TIMESTAMP,
+                item.referencia::TIMESTAMP,
+                timezone('America/Sao_Paulo', now())),
+       COALESCE(item.valor_processado, 0),
+       'MAIDA-' || COALESCE(NULLIF(BTRIM(item.numero_lote), ''),
+                            TO_CHAR(item.referencia, 'YYYYMM')),
+       NULL, COALESCE(item.data_envio_lote, item.referencia, CURRENT_DATE),
+       NULLIF(BTRIM(item.codigo_glosa), ''),
+       CONCAT(COALESCE(NULLIF(BTRIM(item.descricao_servico), ''),
+                       'Item extraído da Maida'),
+              '. Valor glosado na origem: R$ ',
+              TO_CHAR(item.valor_glosa, 'FM999999999990D00')),
+       item.quantidade_executada, item.valor_glosa,
+       NULL, NULL, NULL, NULL, NULL, NULL, item.lancamento_maida,
+       item.quantidade_executada, item.descricao_servico,
+       NULL, item.data_realizacao::TIMESTAMP, 0, 'Itens Maida',
+       0, 'Itens Maida', item.codigo_servico, NULL,
+       'triagem', 'true', 'true', item.numero_lote
+  FROM pendentes AS item
+"""
+
+
+MATERIALIZAR_RASTREIO_MAIDA_PENDENTE_SQL = """
+INSERT INTO api_prontocardio.registros_glosa_demonstrativo_ipm (
+    id_registro, registro_glosa_id, criterio_correspondencia
+)
+SELECT DISTINCT ON (demo.id_registro) demo.id_registro, registro.id,
+       'maida_pendente_lote_guia_codigo_item'
+  FROM api_prontocardio.glossas_nao_vinculadas_ipm AS glosa
+  JOIN api_prontocardio.demonstrativo_conta_ipm AS demo
+    ON demo.id_registro = glosa.id_registro
+   AND demo.origem_maida IS NOT NULL
+  JOIN api_prontocardio.registros_glosa AS registro
+    ON registro.processo_controle_fatura_gab =
+       'MAIDA-' || COALESCE(NULLIF(BTRIM(demo.numero_lote), ''),
+                            TO_CHAR(demo.referencia, 'YYYYMM'))
+   AND UPPER(BTRIM(registro.guia)) =
+       UPPER(BTRIM(COALESCE(demo.numero_guia_senha, '-')))
+   AND UPPER(BTRIM(registro.procedimento)) =
+       UPPER(BTRIM(COALESCE(demo.codigo_servico, '-')))
+   AND registro.motivo_glosa IS NOT DISTINCT FROM
+       NULLIF(BTRIM(demo.codigo_glosa), '')
+   AND registro.sn_ativo = 'true'
+ WHERE NOT EXISTS (
+       SELECT 1
+         FROM api_prontocardio.registros_glosa_demonstrativo_ipm r
+        WHERE r.id_registro = demo.id_registro
+ )
+ ORDER BY demo.id_registro, registro.id
+ON CONFLICT (id_registro) DO NOTHING
 """
 
 
@@ -241,10 +429,16 @@ def materializar_registros_glosa(postgres) -> dict[str, int]:
             desativados = max(cursor.rowcount, 0)
             cursor.execute(REMOVER_RASTREIOS_OBSOLETOS_SQL)
             rastreios_removidos = max(cursor.rowcount, 0)
+            cursor.execute(VINCULAR_TRATATIVAS_MANUAIS_MAIDA_SQL)
+            tratativas_manuais_maida = max(cursor.rowcount, 0)
             cursor.execute(MATERIALIZAR_REGISTROS_SQL)
             registros = max(cursor.rowcount, 0)
             cursor.execute(MATERIALIZAR_RASTREIO_SQL)
             rastreios = max(cursor.rowcount, 0)
+            cursor.execute(MATERIALIZAR_MAIDA_PENDENTE_SQL)
+            registros_maida_pendentes = max(cursor.rowcount, 0)
+            cursor.execute(MATERIALIZAR_RASTREIO_MAIDA_PENDENTE_SQL)
+            rastreios_maida_pendentes = max(cursor.rowcount, 0)
         postgres.commit()
     except Exception:
         postgres.rollback()
@@ -252,6 +446,9 @@ def materializar_registros_glosa(postgres) -> dict[str, int]:
     return {
         "registros_desativados": desativados,
         "rastreios_removidos": rastreios_removidos,
+        "tratativas_manuais_maida": tratativas_manuais_maida,
         "registros_glosa": registros,
         "rastreios": rastreios,
+        "registros_maida_pendentes": registros_maida_pendentes,
+        "rastreios_maida_pendentes": rastreios_maida_pendentes,
     }

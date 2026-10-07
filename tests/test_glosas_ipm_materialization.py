@@ -3,10 +3,13 @@ from pathlib import Path
 import pytest
 
 from nfs_fortaleza.glosas_ipm_materialization import (
+    MATERIALIZAR_MAIDA_PENDENTE_SQL,
+    MATERIALIZAR_RASTREIO_MAIDA_PENDENTE_SQL,
     MATERIALIZAR_RASTREIO_SQL,
     MATERIALIZAR_REGISTROS_SQL,
     RECONCILIAR_REGISTROS_SQL,
     REMOVER_RASTREIOS_OBSOLETOS_SQL,
+    VINCULAR_TRATATIVAS_MANUAIS_MAIDA_SQL,
     materializar_registros_glosa,
 )
 
@@ -29,7 +32,7 @@ class CursorFake:
 
 
 class PostgresFake:
-    def __init__(self, rowcounts=(2, 7, 3, 5)):
+    def __init__(self, rowcounts=(2, 7, 11, 3, 5, 13, 13)):
         self.cursor_fake = CursorFake(rowcounts)
         self.commits = 0
         self.rollbacks = 0
@@ -52,14 +55,20 @@ def test_materializa_registros_e_rastreios_em_uma_transacao():
     assert postgres.cursor_fake.comandos == [
         RECONCILIAR_REGISTROS_SQL,
         REMOVER_RASTREIOS_OBSOLETOS_SQL,
+        VINCULAR_TRATATIVAS_MANUAIS_MAIDA_SQL,
         MATERIALIZAR_REGISTROS_SQL,
         MATERIALIZAR_RASTREIO_SQL,
+        MATERIALIZAR_MAIDA_PENDENTE_SQL,
+        MATERIALIZAR_RASTREIO_MAIDA_PENDENTE_SQL,
     ]
     assert resultado == {
         "registros_desativados": 2,
         "rastreios_removidos": 7,
+        "tratativas_manuais_maida": 11,
         "registros_glosa": 3,
         "rastreios": 5,
+        "registros_maida_pendentes": 13,
+        "rastreios_maida_pendentes": 13,
     }
     assert postgres.commits == 1
     assert postgres.rollbacks == 0
@@ -98,6 +107,24 @@ def test_materializacao_preserva_tratativas_e_e_idempotente():
     assert "DELETE FROM" in remocao
     assert "REGISTRO.ORIGEM_REGISTRO IN ('TRIAGEM', 'CONCILIACAO')" in remocao
     assert "ATUAL.ID_REGISTRO = RASTREIO.ID_REGISTRO" in remocao
+
+
+def test_maida_pendente_vincula_manual_ou_cria_item_tratavel():
+    manual = " ".join(VINCULAR_TRATATIVAS_MANUAIS_MAIDA_SQL.upper().split())
+    pendente = " ".join(MATERIALIZAR_MAIDA_PENDENTE_SQL.upper().split())
+    rastreio = " ".join(
+        MATERIALIZAR_RASTREIO_MAIDA_PENDENTE_SQL.upper().split()
+    )
+
+    assert "UPPER(BTRIM(REGISTRO.GUIA)) = PENDENTE.GUIA" in manual
+    assert "PENDENTE.CODIGO_ITEM IN" in manual
+    assert "WHERE QUANTIDADE = 1" in manual
+    assert "'MAIDA-' ||" in pendente
+    assert "ITEM.VALOR_GLOSA" in pendente
+    assert "ITEM.QUANTIDADE_EXECUTADA" in pendente
+    assert "AND NOT EXISTS" in pendente
+    assert "MAIDA_PENDENTE_LOTE_GUIA_CODIGO_ITEM" in rastreio
+    assert "ON CONFLICT (ID_REGISTRO) DO NOTHING" in rastreio
 
 
 def test_materializacao_usa_mesmo_destino_para_ambos_os_status():
