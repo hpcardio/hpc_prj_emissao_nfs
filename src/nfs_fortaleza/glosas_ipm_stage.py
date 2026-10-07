@@ -15,7 +15,7 @@ WITH contas AS (
            MAX(vl_total_registro) AS vl_total_registro
       FROM dbamv.hpc_v_conta_atendimento
      WHERE sn_pertence_pacote = 'N'
-       AND cd_convenio = 10
+       AND cd_convenio IN (__CONVENIOS_BASE__)
        AND cd_remessa IS NOT NULL
        AND dt_competencia >= :data_inicial
        AND dt_competencia < :data_final
@@ -43,13 +43,16 @@ SELECT h.cd_remessa, h.cd_reg, h.cd_lancamento, h.cd_atendimento,
   LEFT JOIN dbamv.pro_fat p ON p.cd_pro_fat = h.cd_pro_fat
   LEFT JOIN dbamv.gru_pro g ON g.cd_gru_pro = p.cd_gru_pro
  WHERE h.cd_remessa IS NOT NULL
-   AND h.cd_convenio = 10
+   AND (__ESCOPO_ITENS__)
    AND (
        (h.dt_competencia >= :data_inicial AND h.dt_competencia < :data_final)
        OR (h.dt_lancamento >= :data_inicial AND h.dt_lancamento < :data_final)
        OR (h.dt_atendimento >= :data_inicial AND h.dt_atendimento < :data_final)
    )
 """
+
+CONVENIOS_BASE = (10,)
+TAMANHO_LOTE_GUIAS = 500
 
 
 def _linhas(cursor, tamanho: int = 5000) -> Iterable[list[tuple[Any, ...]]]:
@@ -105,6 +108,52 @@ def _periodo_fontes_glosas(destino) -> tuple[date, date] | None:
     )
 
 
+def _guias_maida_com_glosa(
+    destino, data_inicial: date, data_final: date
+) -> tuple[str, ...]:
+    destino.execute(
+        """
+        SELECT COALESCE(
+                   array_agg(DISTINCT BTRIM(numero_guia_senha::text)),
+                   ARRAY[]::text[]
+               )
+          FROM api_prontocardio.demonstrativo_conta_ipm
+         WHERE origem_maida IS NOT NULL
+           AND COALESCE(valor_glosa, 0) > 0
+           AND COALESCE(data_realizacao, referencia) >= %s
+           AND COALESCE(data_realizacao, referencia) < %s
+           AND NULLIF(BTRIM(numero_guia_senha::text), '') IS NOT NULL
+        """,
+        (data_inicial, data_final),
+    )
+    guias = destino.fetchone()[0] or []
+    return tuple(str(guia).strip() for guia in guias if str(guia).strip())
+
+
+def _consulta_com_escopo(
+    consulta: str, guias: tuple[str, ...] = ()
+) -> tuple[str, dict[str, int | str]]:
+    binds = {
+        f"convenio_base_{indice}": codigo
+        for indice, codigo in enumerate(CONVENIOS_BASE)
+    }
+    marcadores_base = ", ".join(f":{nome}" for nome in binds)
+    consulta = consulta.replace("__CONVENIOS_BASE__", marcadores_base)
+    if "__ESCOPO_ITENS__" not in consulta:
+        return consulta, binds
+
+    escopos = [f"h.cd_convenio IN ({marcadores_base})"]
+    for inicio in range(0, len(guias), TAMANHO_LOTE_GUIAS):
+        lote = guias[inicio : inicio + TAMANHO_LOTE_GUIAS]
+        nomes = []
+        for deslocamento, guia in enumerate(lote):
+            nome = f"guia_{inicio + deslocamento}"
+            binds[nome] = guia
+            nomes.append(f":{nome}")
+        escopos.append(f"h.nr_guia IN ({', '.join(nomes)})")
+    return consulta.replace("__ESCOPO_ITENS__", " OR ".join(escopos)), binds
+
+
 def carregar_hpc_intermediaria(oracle, postgres) -> dict[str, int]:
     with postgres.cursor() as destino:
         ensure_process_report_table(destino, "api_prontocardio")
@@ -113,6 +162,9 @@ def carregar_hpc_intermediaria(oracle, postgres) -> dict[str, int]:
             postgres.commit()
             return {"remessas": 0, "itens": 0}
         data_inicial, data_final = periodo
+        guias_maida = _guias_maida_com_glosa(
+            destino, data_inicial, data_final
+        )
         destino.execute("CREATE SCHEMA IF NOT EXISTS api_prontocardio_staging")
         destino.execute("""
             CREATE TABLE IF NOT EXISTS
@@ -151,10 +203,17 @@ def carregar_hpc_intermediaria(oracle, postgres) -> dict[str, int]:
             ("remessas", REMESSAS_SQL, "ipm_remessas_oracle"),
             ("itens", ITENS_SQL, "ipm_itens_oracle"),
         ):
+            consulta, parametros_escopo = _consulta_com_escopo(
+                consulta, guias_maida if nome == "itens" else ()
+            )
             origem = oracle.cursor()
             origem.execute(
                 consulta,
-                {"data_inicial": data_inicial, "data_final": data_final},
+                {
+                    "data_inicial": data_inicial,
+                    "data_final": data_final,
+                    **parametros_escopo,
+                },
             )
             colunas = [item[0].lower() for item in origem.description]
             quantidade = 0

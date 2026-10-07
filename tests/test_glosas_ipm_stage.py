@@ -1,16 +1,23 @@
 from datetime import date
 
 from nfs_fortaleza.glosas_ipm_stage import (
+    ITENS_SQL,
     REMESSAS_SQL,
+    _consulta_com_escopo,
     carregar_hpc_intermediaria,
 )
 
 
 class CursorPostgres:
-    def __init__(self, periodo=(date(2026, 1, 1), date(2026, 1, 31))):
+    def __init__(
+        self,
+        periodo=(date(2026, 1, 1), date(2026, 1, 31)),
+        guias=(),
+    ):
         self.comandos = []
         self.periodo = periodo
         self.proxima_linha = None
+        self.guias = guias
 
     def __enter__(self):
         return self
@@ -25,6 +32,8 @@ class CursorPostgres:
             self.proxima_linha = (False,)
         elif "SELECT MIN(data_referencia)" in texto:
             self.proxima_linha = self.periodo
+        elif "array_agg(DISTINCT BTRIM(numero_guia_senha::text))" in texto:
+            self.proxima_linha = (self.guias,)
 
     def fetchone(self):
         return self.proxima_linha
@@ -35,8 +44,12 @@ def _comando_normalizado(comando) -> str:
 
 
 class ConexaoPostgres:
-    def __init__(self, periodo=(date(2026, 1, 1), date(2026, 1, 31))):
-        self.destino = CursorPostgres(periodo)
+    def __init__(
+        self,
+        periodo=(date(2026, 1, 1), date(2026, 1, 31)),
+        guias=(),
+    ):
+        self.destino = CursorPostgres(periodo, guias)
         self.commits = 0
 
     def cursor(self):
@@ -49,7 +62,13 @@ class ConexaoPostgres:
 class CursorOracle:
     description = (("CD_REMESSA",),)
 
-    def execute(self, *_):
+    def __init__(self):
+        self.consulta = ""
+        self.parametros = {}
+
+    def execute(self, consulta, parametros=None):
+        self.consulta = str(consulta)
+        self.parametros = parametros or {}
         return None
 
     def fetchmany(self, _):
@@ -60,8 +79,13 @@ class CursorOracle:
 
 
 class ConexaoOracle:
+    def __init__(self):
+        self.cursores = []
+
     def cursor(self):
-        return CursorOracle()
+        cursor = CursorOracle()
+        self.cursores.append(cursor)
+        return cursor
 
 
 def test_cria_tabela_de_itens_antes_de_alterar_colunas():
@@ -138,3 +162,52 @@ def test_total_da_remessa_soma_registros_consolidados_por_conta():
     assert "MAX(VL_TOTAL_REGISTRO) AS VL_TOTAL_REGISTRO" in consulta
     assert "SUM(VL_TOTAL_REGISTRO) AS VALOR_TOTAL" in consulta
     assert "GROUP BY CD_REMESSA, CD_REG" in consulta
+
+
+def test_consulta_de_itens_usa_guias_maida_em_qualquer_convenio():
+    consulta, parametros = _consulta_com_escopo(
+        ITENS_SQL, ("412690", "413462")
+    )
+
+    consulta = _comando_normalizado(consulta)
+    assert "h.cd_convenio IN (:convenio_base_0)" in consulta
+    assert "h.nr_guia IN (:guia_0, :guia_1)" in consulta
+    assert parametros == {
+        "convenio_base_0": 10,
+        "guia_0": "412690",
+        "guia_1": "413462",
+    }
+
+
+def test_guias_sao_divididas_em_lotes_compativeis_com_oracle():
+    guias = tuple(str(numero) for numero in range(501))
+
+    consulta, _ = _consulta_com_escopo(ITENS_SQL, guias)
+
+    assert consulta.count("h.nr_guia IN (") == 2
+    assert ":guia_0" in consulta
+    assert ":guia_500" in consulta
+
+
+def test_carga_limita_outros_convenios_as_guias_maida():
+    postgres = ConexaoPostgres(guias=("412690",))
+    oracle = ConexaoOracle()
+
+    carregar_hpc_intermediaria(oracle, postgres)
+
+    consultas_carga = [
+        cursor
+        for cursor in oracle.cursores
+        if "data_inicial" in cursor.parametros
+    ]
+    assert len(consultas_carga) == 2
+    assert all(
+        cursor.parametros["convenio_base_0"] == 10
+        for cursor in consultas_carga
+    )
+    consulta_itens = next(
+        cursor for cursor in consultas_carga if "guia_0" in cursor.parametros
+    )
+    assert consulta_itens.parametros["guia_0"] == "412690"
+    assert "h.nr_guia IN (:guia_0)" in consulta_itens.consulta
+    assert all("__ESCOPO" not in cursor.consulta for cursor in consultas_carga)
