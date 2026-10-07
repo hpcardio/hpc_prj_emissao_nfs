@@ -422,6 +422,142 @@ SET registro_glosa_id = EXCLUDED.registro_glosa_id,
 """
 
 
+CONSOLIDAR_REGISTROS_MAIDA_ENRIQUECIDOS_SQL = """
+WITH pares_brutos AS (
+    SELECT DISTINCT
+           rastreio.registro_glosa_id AS destino_id,
+           legado.id AS legado_id,
+           (
+               legado.processo_recurso IS NOT NULL
+               OR legado.qtd_recursado IS NOT NULL
+               OR legado.valor_recursado IS NOT NULL
+               OR legado.dt_recurso IS NOT NULL
+               OR legado.dt_pagamento IS NOT NULL
+               OR legado.dt_recebimento IS NOT NULL
+               OR legado.valor_recebido IS NOT NULL
+               OR legado.qtd_recebida IS NOT NULL
+               OR legado.observacao_recebimento IS NOT NULL
+               OR legado.descricao_glosa_agrupada IS NOT NULL
+               OR legado.descricao_recurso_agrupada IS NOT NULL
+               OR legado.descricao_acato_agrupada IS NOT NULL
+           ) AS possui_tratativa,
+           (
+               destino.processo_recurso IS NOT NULL
+               OR destino.qtd_recursado IS NOT NULL
+               OR destino.valor_recursado IS NOT NULL
+               OR destino.dt_recurso IS NOT NULL
+               OR destino.dt_pagamento IS NOT NULL
+               OR destino.dt_recebimento IS NOT NULL
+               OR destino.valor_recebido IS NOT NULL
+               OR destino.qtd_recebida IS NOT NULL
+               OR destino.observacao_recebimento IS NOT NULL
+               OR destino.descricao_glosa_agrupada IS NOT NULL
+               OR destino.descricao_recurso_agrupada IS NOT NULL
+               OR destino.descricao_acato_agrupada IS NOT NULL
+           ) AS destino_possui_tratativa
+      FROM api_prontocardio.registros_glosa_demonstrativo_ipm AS rastreio
+      JOIN api_prontocardio.demonstrativo_conta_ipm AS demo
+        ON demo.id_registro = rastreio.id_registro
+       AND demo.origem_maida IS NOT NULL
+      JOIN api_prontocardio.registros_glosa AS destino
+        ON destino.id = rastreio.registro_glosa_id
+       AND destino.sn_ativo = 'true'
+      JOIN api_prontocardio.registros_glosa AS legado
+        ON legado.id <> destino.id
+       AND legado.sn_ativo = 'true'
+       AND UPPER(BTRIM(legado.processo_controle_fatura_gab)) = UPPER(
+           'MAIDA-' || COALESCE(NULLIF(BTRIM(demo.numero_lote), ''),
+                                'SEM-LOTE')
+       )
+       AND UPPER(BTRIM(legado.guia)) =
+           UPPER(BTRIM(COALESCE(demo.numero_guia_senha, '-')))
+       AND UPPER(BTRIM(legado.procedimento)) =
+           UPPER(BTRIM(COALESCE(demo.codigo_servico, '-')))
+       AND legado.motivo_glosa IS NOT DISTINCT FROM
+           NULLIF(BTRIM(demo.codigo_glosa), '')
+     WHERE rastreio.criterio_correspondencia LIKE 'maida_hpc_%'
+), pares_contados AS (
+    SELECT pares_brutos.*,
+           COUNT(*) OVER (PARTITION BY legado_id) AS destinos_por_legado,
+           COUNT(*) FILTER (WHERE possui_tratativa)
+               OVER (PARTITION BY destino_id)
+           + MAX(destino_possui_tratativa::integer)
+               OVER (PARTITION BY destino_id) AS tratativas_por_destino
+      FROM pares_brutos
+), pares_seguros AS (
+    SELECT *
+      FROM pares_contados
+     WHERE destinos_por_legado = 1
+       AND tratativas_por_destino <= 1
+), fontes AS (
+    SELECT DISTINCT ON (par.destino_id)
+           par.destino_id, par.legado_id, par.possui_tratativa,
+           legado.processo_recurso, legado.descricao_glosa,
+           legado.qtd_recursado, legado.valor_recursado,
+           legado.dt_recurso, legado.dt_pagamento,
+           legado.dt_recebimento, legado.valor_recebido,
+           legado.qtd_recebida, legado.observacao_recebimento,
+           legado.descricao_glosa_agrupada,
+           legado.descricao_recurso_agrupada,
+           legado.descricao_acato_agrupada, legado.numero_lote
+      FROM pares_seguros AS par
+      JOIN api_prontocardio.registros_glosa AS legado
+        ON legado.id = par.legado_id
+     ORDER BY par.destino_id, par.possui_tratativa DESC, par.legado_id
+), migrados AS (
+    UPDATE api_prontocardio.registros_glosa AS destino
+       SET processo_recurso = COALESCE(fonte.processo_recurso,
+                                       destino.processo_recurso),
+           descricao_glosa = CASE
+               WHEN fonte.possui_tratativa
+                   THEN COALESCE(NULLIF(BTRIM(fonte.descricao_glosa), ''),
+                                 destino.descricao_glosa)
+               ELSE destino.descricao_glosa
+           END,
+           qtd_recursado = COALESCE(fonte.qtd_recursado,
+                                    destino.qtd_recursado),
+           valor_recursado = COALESCE(fonte.valor_recursado,
+                                      destino.valor_recursado),
+           dt_recurso = COALESCE(fonte.dt_recurso, destino.dt_recurso),
+           dt_pagamento = COALESCE(fonte.dt_pagamento,
+                                   destino.dt_pagamento),
+           dt_recebimento = COALESCE(fonte.dt_recebimento,
+                                     destino.dt_recebimento),
+           valor_recebido = COALESCE(fonte.valor_recebido,
+                                     destino.valor_recebido),
+           qtd_recebida = COALESCE(fonte.qtd_recebida,
+                                   destino.qtd_recebida),
+           observacao_recebimento = COALESCE(
+               fonte.observacao_recebimento,
+               destino.observacao_recebimento
+           ),
+           descricao_glosa_agrupada = COALESCE(
+               fonte.descricao_glosa_agrupada,
+               destino.descricao_glosa_agrupada
+           ),
+           descricao_recurso_agrupada = COALESCE(
+               fonte.descricao_recurso_agrupada,
+               destino.descricao_recurso_agrupada
+           ),
+           descricao_acato_agrupada = COALESCE(
+               fonte.descricao_acato_agrupada,
+               destino.descricao_acato_agrupada
+           ),
+           numero_lote = COALESCE(fonte.numero_lote, destino.numero_lote)
+      FROM fontes AS fonte
+     WHERE destino.id = fonte.destino_id
+     RETURNING destino.id
+)
+UPDATE api_prontocardio.registros_glosa AS legado
+   SET sn_ativo = 'false'
+  FROM pares_seguros AS par
+ WHERE legado.id = par.legado_id
+   AND EXISTS (
+       SELECT 1 FROM migrados WHERE migrados.id = par.destino_id
+   )
+"""
+
+
 def materializar_registros_glosa(postgres) -> dict[str, int]:
     try:
         with postgres.cursor() as cursor:
@@ -435,6 +571,8 @@ def materializar_registros_glosa(postgres) -> dict[str, int]:
             registros = max(cursor.rowcount, 0)
             cursor.execute(MATERIALIZAR_RASTREIO_SQL)
             rastreios = max(cursor.rowcount, 0)
+            cursor.execute(CONSOLIDAR_REGISTROS_MAIDA_ENRIQUECIDOS_SQL)
+            registros_maida_consolidados = max(cursor.rowcount, 0)
             cursor.execute(MATERIALIZAR_MAIDA_PENDENTE_SQL)
             registros_maida_pendentes = max(cursor.rowcount, 0)
             cursor.execute(MATERIALIZAR_RASTREIO_MAIDA_PENDENTE_SQL)
@@ -449,6 +587,7 @@ def materializar_registros_glosa(postgres) -> dict[str, int]:
         "tratativas_manuais_maida": tratativas_manuais_maida,
         "registros_glosa": registros,
         "rastreios": rastreios,
+        "registros_maida_consolidados": registros_maida_consolidados,
         "registros_maida_pendentes": registros_maida_pendentes,
         "rastreios_maida_pendentes": rastreios_maida_pendentes,
     }

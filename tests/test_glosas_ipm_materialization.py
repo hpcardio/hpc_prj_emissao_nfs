@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from nfs_fortaleza.glosas_ipm_materialization import (
+    CONSOLIDAR_REGISTROS_MAIDA_ENRIQUECIDOS_SQL,
     MATERIALIZAR_MAIDA_PENDENTE_SQL,
     MATERIALIZAR_RASTREIO_MAIDA_PENDENTE_SQL,
     MATERIALIZAR_RASTREIO_SQL,
@@ -32,7 +33,7 @@ class CursorFake:
 
 
 class PostgresFake:
-    def __init__(self, rowcounts=(2, 7, 11, 3, 5, 13, 13)):
+    def __init__(self, rowcounts=(2, 7, 11, 3, 5, 17, 13, 13)):
         self.cursor_fake = CursorFake(rowcounts)
         self.commits = 0
         self.rollbacks = 0
@@ -58,6 +59,7 @@ def test_materializa_registros_e_rastreios_em_uma_transacao():
         VINCULAR_TRATATIVAS_MANUAIS_MAIDA_SQL,
         MATERIALIZAR_REGISTROS_SQL,
         MATERIALIZAR_RASTREIO_SQL,
+        CONSOLIDAR_REGISTROS_MAIDA_ENRIQUECIDOS_SQL,
         MATERIALIZAR_MAIDA_PENDENTE_SQL,
         MATERIALIZAR_RASTREIO_MAIDA_PENDENTE_SQL,
     ]
@@ -67,6 +69,7 @@ def test_materializa_registros_e_rastreios_em_uma_transacao():
         "tratativas_manuais_maida": 11,
         "registros_glosa": 3,
         "rastreios": 5,
+        "registros_maida_consolidados": 17,
         "registros_maida_pendentes": 13,
         "rastreios_maida_pendentes": 13,
     }
@@ -125,6 +128,22 @@ def test_maida_pendente_vincula_manual_ou_cria_item_tratavel():
     assert "AND NOT EXISTS" in pendente
     assert "MAIDA_PENDENTE_LOTE_GUIA_CODIGO_ITEM" in rastreio
     assert "ON CONFLICT (ID_REGISTRO) DO NOTHING" in rastreio
+
+
+def test_maida_enriquecida_consolida_fallback_sem_perder_tratativa():
+    consolidacao = " ".join(
+        CONSOLIDAR_REGISTROS_MAIDA_ENRIQUECIDOS_SQL.upper().split()
+    )
+
+    assert "RASTREIO.CRITERIO_CORRESPONDENCIA LIKE 'MAIDA_HPC_%'" in consolidacao
+    assert "DESTINOS_POR_LEGADO = 1" in consolidacao
+    assert "TRATATIVAS_POR_DESTINO <= 1" in consolidacao
+    assert "DESTINO_POSSUI_TRATATIVA::INTEGER" in consolidacao
+    assert "PROCESSO_RECURSO = COALESCE(FONTE.PROCESSO_RECURSO" in consolidacao
+    assert "QTD_RECURSADO = COALESCE(FONTE.QTD_RECURSADO" in consolidacao
+    assert "VALOR_RECURSADO = COALESCE(FONTE.VALOR_RECURSADO" in consolidacao
+    assert "DT_RECURSO = COALESCE(FONTE.DT_RECURSO" in consolidacao
+    assert "SET SN_ATIVO = 'FALSE'" in consolidacao
 
 
 def test_materializacao_usa_mesmo_destino_para_ambos_os_status():
