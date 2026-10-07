@@ -11,6 +11,12 @@ with legado as (
         null::text as origem_maida
     from {{ source('prontocardio', 'demonstrativo_processos_ipm') }}
     where coalesce(valor_glosa, 0) > 0
+      and not exists (
+          select 1
+          from {{ source('prontocardio', 'demonstrativo_conta_ipm') }} maida
+          where maida.origem_maida is not null
+            and maida.id_registro::text = demonstrativo_processos_ipm.id_registro::text
+      )
 ), maida as (
     select
         id_registro::text as id_registro, referencia, numero_lote,

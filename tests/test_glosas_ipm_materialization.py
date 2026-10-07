@@ -200,6 +200,11 @@ def test_maida_usa_somente_chave_tripla_da_view_hpc():
     ).read_text()
     assert "source('prontocardio', 'demonstrativo_conta_ipm')" in staging
     assert "where origem_maida is not null" in staging
+    assert "maida.origem_maida is not null" in staging
+    assert (
+        "maida.id_registro::text = demonstrativo_processos_ipm.id_registro::text"
+        in staging
+    )
 
     for prioridade in (11, 16):
         inicio = f"select {prioridade} as prioridade" if prioridade == 11 else (
