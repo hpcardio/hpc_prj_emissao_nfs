@@ -1,8 +1,18 @@
 with demonstrativos_maida as (
     select
         d.*,
-        upper(btrim(coalesce(d.numero_guia_senha, ''))) as guia_normalizada,
-        upper(btrim(coalesce(d.codigo_servico, ''))) as servico_normalizado,
+        ltrim(
+            regexp_replace(
+                coalesce(d.numero_guia_senha, ''), '[^0-9]', '', 'g'
+            ),
+            '0'
+        ) as guia_normalizada,
+        ltrim(
+            regexp_replace(
+                coalesce(d.codigo_servico, ''), '[^0-9]', '', 'g'
+            ),
+            '0'
+        ) as servico_normalizado,
         ltrim(
             regexp_replace(coalesce(d.codigo_beneficiario, ''), '[^0-9]', '', 'g'),
             '0'
@@ -23,10 +33,10 @@ with demonstrativos_maida as (
            i.*
       from demonstrativos_maida d
       join {{ ref('stg_hpc_itens_ipm') }} i
-        on i.nr_guia_normalizada = d.guia_normalizada
+        on i.nr_guia_chave_maida = d.guia_normalizada
        and d.servico_normalizado in (
-           i.cd_pro_fat_normalizado,
-           i.cd_tuss_normalizado
+           i.cd_pro_fat_chave_maida,
+           i.cd_tuss_chave_maida
        )
        and (
            d.carteira_normalizada = ''
